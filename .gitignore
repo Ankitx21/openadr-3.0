@@ -1,0 +1,10 @@
+*.pyc
+__pycache__/
+*.sqlite3-journal
+.env
+.venv/
+env/
+venv/
+staticfiles/
+tariffs_received.csv
+tariffs_received.json
