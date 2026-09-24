@@ -36,7 +36,7 @@ class TeamVen:
     def __init__(
         self,
         token: str,
-        server_url: str = "http://127.0.0.1:7860",
+        server_url: str = "https://openadr-3-0.onrender.com",
         appliance_type: str = "Generic_Load",
     ):
         self.token = token.strip()
@@ -338,7 +338,7 @@ def interactive_menu(server_url: str):
 def main():
     parser = argparse.ArgumentParser(description="OpenADR 3.0 Team VEN Client")
     parser.add_argument("--token", default="", help="Your assigned team API token (e.g. KEY-TEAM01-A7F9)")
-    parser.add_argument("--server", default="http://127.0.0.1:7860", help="Organizer VTN server URL")
+    parser.add_argument("--server", default="https://openadr-3-0.onrender.com", help="Organizer VTN server URL")
     parser.add_argument("--fetch-tariffs", action="store_true", help="Download direct JSON and CSV tariffs")
     parser.add_argument("--report-power", type=float, default=None, help="Report power reading in kW")
     parser.add_argument("--appliance", default="Smart_AC", help="Appliance name")

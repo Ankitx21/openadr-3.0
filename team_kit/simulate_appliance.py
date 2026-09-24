@@ -22,7 +22,7 @@ except ImportError:
         from team_kit.openadr3_client import TeamVen
 
 
-def run_simulation(token: str = "KEY-TEAM01-A7F9", server_url: str = "http://127.0.0.1:7860", appliance_type: str = "Smart_Air_Conditioner"):
+def run_simulation(token: str = "KEY-TEAM01-A7F9", server_url: str = "https://openadr-3-0.onrender.com", appliance_type: str = "Smart_Air_Conditioner"):
     print("=" * 70)
     print(f" RUNNING APPLIANCE SIMULATION WITH TOKEN: {token} ({appliance_type})")
     print("=" * 70)
