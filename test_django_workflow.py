@@ -32,18 +32,16 @@ def run_django_tests():
     rec1 = TelemetryRecord.objects.create(
         team=team1,
         appliance="Smart_AC",
-        power_kw=1.85,
-        energy_kwh=1.85,
-        status="RUNNING",
+        outdoor_temperature=32.5,
+        energy=1.85,
         notes="Pre-cooling test",
         timestamp=django.utils.timezone.now()
     )
     rec2 = TelemetryRecord.objects.create(
         team=team1,
         appliance="Geyser",
-        power_kw=2.10,
-        energy_kwh=2.10,
-        status="RUNNING",
+        outdoor_temperature=31.0,
+        energy=2.10,
         notes="Water heating test",
         timestamp=django.utils.timezone.now()
     )
@@ -54,8 +52,9 @@ def run_django_tests():
     apps = team1.get_latest_appliances()
     assert "Smart_AC" in apps
     assert "Geyser" in apps
-    assert apps["Smart_AC"]["power_kw"] == 1.85
-    assert apps["Geyser"]["power_kw"] == 2.10
+    assert apps["Smart_AC"]["energy"] == 1.85
+    assert apps["Smart_AC"]["outdoor_temperature"] == 32.5
+    assert apps["Geyser"]["energy"] == 2.10
     print(f"[PASS] 3. Team latest appliances retrieved: {list(apps.keys())}.")
 
     # 4. Test View Render via Django test Client
@@ -69,7 +68,7 @@ def run_django_tests():
     assert "Teams & Registered Appliances" in content
     assert "Smart_AC" in content
     assert "Geyser" in content
-    print("[PASS] 4. Dashboard rendered successfully with single Appliances column.")
+    print("[PASS] 4. Dashboard rendered successfully with updated schema.")
 
     # Tariffs API GET
     resp_tariffs = client.get(f"/api/v3/tariffs.json?token={team1.token}")
@@ -91,7 +90,7 @@ def run_django_tests():
             "EV_Charger": 3.3,
             "Water_Heater": 1.2
         },
-        "status": "CHARGING",
+        "outdoor_temperature": 29.4,
         "notes": "Evening charge"
     }
     resp_post = client.post(
@@ -104,10 +103,10 @@ def run_django_tests():
     print("[PASS] 7. Multi-appliance telemetry ingestion verified.")
 
     # CSV Downloads
-    resp_csv = client.get("/download/tariffs.csv")
+    resp_csv = client.get("/download/telemetry.csv")
     assert resp_csv.status_code == 200
-    assert "start_time_ist" in resp_csv.content.decode("utf-8")
-    print("[PASS] 8. Tariffs CSV download verified.")
+    assert "outdoor_temperature_c" in resp_csv.content.decode("utf-8")
+    print("[PASS] 8. Telemetry CSV download verified.")
 
     print("\n=======================================================")
     print(" ALL 8 DJANGO VTN TEST STEPS PASSED SUCCESSFULLY! ")

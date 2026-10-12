@@ -59,15 +59,11 @@
         </div>
     </div>
 
-    <!-- Minimalist Fleet Stats Bar -->
+    <!-- Minimalist Stats Bar -->
     <div class="stats-bar">
         <div class="stat-item">
-            <span class="stat-label">Total Fleet Demand</span>
-            <span class="stat-val" style="color: #38bdf8;">{{ total_fleet_kw|floatformat:2 }} kW</span>
-        </div>
-        <div class="stat-item" style="border-left: 1px solid #1e293b; padding-left: 1.5rem;">
-            <span class="stat-label">Connected Teams</span>
-            <span class="stat-val" style="color: #34d399;">{{ connected_teams_cnt }} / {{ total_teams_cnt }}</span>
+            <span class="stat-label">Total Teams</span>
+            <span class="stat-val" style="color: #38bdf8;">{{ total_teams_cnt }}</span>
         </div>
         <div class="stat-item" style="border-left: 1px solid #1e293b; padding-left: 1.5rem;">
             <span class="stat-label">Total Appliances</span>
@@ -85,19 +81,16 @@
         <a href="/download/telemetry.csv" class="btn btn-purple">Download All Team Telemetry (CSV)</a>
     </div>
 
-    <!-- Clean Team Roster Table with single Appliances column -->
+    <!-- Clean Team Roster Table -->
     <div class="card">
         <h2>Teams & Registered Appliances</h2>
         <div class="table-scroll">
             <table>
                 <thead>
                     <tr>
-                        <th style="min-width: 110px;">Team Name</th>
-                        <th style="min-width: 90px;">Status</th>
-                        <th style="min-width: 380px;">Appliances</th>
-                        <th style="min-width: 110px; text-align:right;">Total Load</th>
-                        <th style="min-width: 80px; text-align:center;">Reports</th>
-                        <th style="min-width: 110px; text-align:right;">Last Active (IST)</th>
+                        <th style="min-width: 140px;">Team Name</th>
+                        <th style="min-width: 420px;">Appliances</th>
+                        <th style="min-width: 120px; text-align:center;">Reports Ingested</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -105,19 +98,15 @@
                     <tr>
                         <td style="white-space:nowrap;"><strong>{{ t.team_name }}</strong></td>
                         <td>
-                            {% if t.is_connected %}
-                            <span class="status-active">Connected</span>
-                            {% else %}
-                            <span class="status-awaiting">Awaiting</span>
-                            {% endif %}
-                        </td>
-                        <td>
                             {% if t.appliances %}
                             <div class="app-wrap">
                                 {% for app_name, app_data in t.appliances.items %}
                                 <span class="app-pill">
                                     <span class="name">{{ app_name }}</span>
-                                    <span class="val">{{ app_data.power_kw|floatformat:2 }} kW</span>
+                                    <span class="val">{{ app_data.energy }} kWh</span>
+                                    {% if app_data.outdoor_temperature is not None %}
+                                    <span style="color:#f59e0b; font-size:0.75rem; margin-left:4px;">{{ app_data.outdoor_temperature }}°C</span>
+                                    {% endif %}
                                 </span>
                                 {% endfor %}
                             </div>
@@ -125,13 +114,11 @@
                             <span style="color:#64748b; font-size:0.8rem; font-style:italic;">None</span>
                             {% endif %}
                         </td>
-                        <td style="color:#38bdf8; font-weight:700; text-align:right; white-space:nowrap;">{{ t.total_kw|floatformat:2 }} kW</td>
                         <td style="text-align:center; font-weight:600;">{{ t.total_reports }}</td>
-                        <td style="text-align:right; white-space:nowrap;"><small style="color:#94a3b8;">{{ t.last_active }}</small></td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="6" style="text-align:center; color:#94a3b8;">No teams registered.</td>
+                        <td colspan="3" style="text-align:center; color:#94a3b8;">No teams registered.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -148,23 +135,27 @@
                     <th>Time (IST)</th>
                     <th>Team Name</th>
                     <th>Appliance</th>
-                    <th>Power Demand</th>
-                    <th>Energy Usage</th>
-                    <th>Status</th>
+                    <th>Outdoor Temperature</th>
+                    <th>Energy</th>
                 </tr>
             </thead>
             <tbody>
                 {% for r in recent_telemetry %}
                 <tr>
-                    <td><small>{{ r.timestamp|date:"H:i:s" }} IST</small></td>
+                    <td><small>{{ r.timestamp|date:"Y-m-d H:i:s" }} IST</small></td>
                     <td><strong>{{ r.team.team_name }}</strong></td>
                     <td><span class="val-badge">{{ r.appliance }}</span></td>
-                    <td style="color:#38bdf8; font-weight:700;">{{ r.power_kw|floatformat:2 }} kW</td>
-                    <td>{{ r.energy_kwh|floatformat:2 }} kWh</td>
-                    <td><span style="color:#34d399;">{{ r.status }}</span></td>
+                    <td style="color:#f59e0b; font-weight:600;">
+                        {% if r.outdoor_temperature is not None %}
+                        {{ r.outdoor_temperature }} °C
+                        {% else %}
+                        <span style="color:#64748b;">-</span>
+                        {% endif %}
+                    </td>
+                    <td style="color:#38bdf8; font-weight:700;">{{ r.energy }} kWh</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="6" style="color:#94a3b8; text-align:center;">No telemetry reported yet.</td></tr>
+                <tr><td colspan="5" style="color:#94a3b8; text-align:center;">No telemetry reported yet.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -180,7 +171,7 @@
         <div class="code-box">POST /api/v3/reports?token=YOUR_ASSIGNED_TOKEN
 Content-Type: application/json
 
-{"appliance": "Water_Heater", "power_kw": 2.10}</div>
+{"appliance": "Water_Heater", "energy": 2.10, "outdoor_temperature": 28.5}</div>
     </div>
 </body>
 </html>

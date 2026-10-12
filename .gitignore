@@ -8,3 +8,5 @@ venv/
 staticfiles/
 tariffs_received.csv
 tariffs_received.json
+published_tariffs.csv
+published_tariffs.json

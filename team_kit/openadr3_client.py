@@ -135,42 +135,66 @@ class TeamVen:
         print(f" -> CSV : {csv_file} (Open in Excel or Pandas)")
         print(f" -> JSON: {json_file}")
 
+    def report_telemetry(
+        self,
+        energy: float,
+        outdoor_temperature: Optional[float] = None,
+        appliance: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """Submit single appliance telemetry (energy, outdoor_temperature, time) to VTN."""
+        app_name = appliance or self.appliance_type
+        payload: Dict[str, Any] = {
+            "appliance": app_name,
+            "energy": float(energy),
+            "notes": notes,
+        }
+        if outdoor_temperature is not None:
+            payload["outdoor_temperature"] = float(outdoor_temperature)
+        if timestamp:
+            payload["timestamp"] = timestamp
+
+        res = self._http_post("/api/v3/reports", payload)
+        temp_str = f"{outdoor_temperature:.1f}°C" if outdoor_temperature is not None else "N/A"
+        print(f"[REPORTED] {app_name}: {energy:.2f} kWh | Temp: {temp_str}")
+        return res
+
     def report_power(
         self,
         power_kw: float,
         energy_kwh: Optional[float] = None,
+        outdoor_temperature: Optional[float] = None,
         appliance: Optional[str] = None,
         status: str = "RUNNING",
         notes: str = "",
     ) -> Dict[str, Any]:
-        """Submit single appliance power reading to VTN."""
-        app_name = appliance or self.appliance_type
-        payload = {
-            "appliance": app_name,
-            "power_kw": float(power_kw),
-            "energy_kwh": float(energy_kwh) if energy_kwh is not None else round(float(power_kw) * 1.0, 4),
-            "status": status,
-            "notes": notes,
-        }
-        res = self._http_post("/api/v3/reports", payload)
-        print(f"[REPORTED] {app_name}: {power_kw:.2f} kW | Status: {status}")
-        return res
+        """Compatibility alias: forward power reading as energy to VTN."""
+        enrg = float(energy_kwh) if energy_kwh is not None else float(power_kw)
+        return self.report_telemetry(
+            energy=enrg,
+            outdoor_temperature=outdoor_temperature,
+            appliance=appliance,
+            notes=notes,
+        )
 
     def report_multi_appliances(
         self,
         appliances_dict: Dict[str, float],
-        status: str = "RUNNING",
+        outdoor_temperature: Optional[float] = None,
         notes: str = "",
     ) -> Dict[str, Any]:
-        """Submit multi-appliance breakdown simultaneously to VTN.
+        """Submit multi-appliance energy breakdown simultaneously to VTN.
 
         Example: {'Smart_AC': 1.8, 'EV_Charger': 3.3, 'Water_Heater': 0.9}
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "appliances": appliances_dict,
-            "status": status,
             "notes": notes,
         }
+        if outdoor_temperature is not None:
+            payload["outdoor_temperature"] = float(outdoor_temperature)
+
         res = self._http_post("/api/v3/reports", payload)
         print(f"[MULTI-REPORTED] Submitted {len(appliances_dict)} appliance readings to VTN.")
         return res
@@ -223,14 +247,16 @@ def interactive_menu(server_url: str):
         if reg_apps:
             print("  REGISTERED APPLIANCES:")
             for a in reg_apps:
-                print(f"    - {a['appliance']:<20} -> {a['power_kw']:.2f} kW ({a.get('status', 'RUNNING')})")
+                temp_val = a.get("outdoor_temperature")
+                temp_disp = f"{temp_val}°C" if temp_val is not None else "N/A"
+                print(f"    - {a['appliance']:<20} -> {a.get('energy', 0.0):.2f} kWh (Temp: {temp_disp})")
         else:
             print("  REGISTERED APPLIANCES: None yet (Report your first device below)")
         print("-" * 50)
         print("  SELECT AN ACTION:")
         print("  1. Download 48-Hour Day-Ahead Tariffs (Direct JSON & CSV)")
-        print("  2. Update / Report Single Appliance Power Reading (kW)")
-        print("  3. Update / Report Multi-Appliance Breakdown")
+        print("  2. Update / Report Telemetry (Appliance, Energy, Outdoor Temperature)")
+        print("  3. Update / Report Multi-Appliance Energy Breakdown")
         print("  4. View Live Competition Leaderboard")
         print("  5. Exit")
         print("=" * 50)
@@ -250,7 +276,7 @@ def interactive_menu(server_url: str):
             if reg_apps:
                 print("\nYour Registered Appliances:")
                 for idx, a in enumerate(reg_apps, start=1):
-                    print(f"  [{idx}] {a['appliance']} (Current: {a['power_kw']:.2f} kW)")
+                    print(f"  [{idx}] {a['appliance']} (Current: {a.get('energy', 0.0):.2f} kWh)")
                 new_idx = len(reg_apps) + 1
                 print(f"  [{new_idx}] Register a new appliance...")
                 sel = input(f"Select appliance [1-{new_idx}]: ").strip()
@@ -270,13 +296,15 @@ def interactive_menu(server_url: str):
                 print("Appliance name cannot be empty.")
                 continue
 
-            pwr_str = input(f"Enter instantaneous power consumption for {app} in kW: ").strip()
+            enrg_str = input(f"Enter energy consumption for {app} in kWh: ").strip()
             try:
-                pwr = float(pwr_str)
-                notes = input("Optional note (e.g. Peak shaving active): ").strip()
-                ven.report_power(power_kw=pwr, appliance=app, notes=notes)
+                enrg = float(enrg_str)
+                temp_str = input("Enter outdoor temperature in °C (optional, press Enter to skip): ").strip()
+                outdoor_temp = float(temp_str) if temp_str else None
+                notes = input("Optional note (press Enter to skip): ").strip()
+                ven.report_telemetry(energy=enrg, outdoor_temperature=outdoor_temp, appliance=app, notes=notes)
             except ValueError:
-                print("[ERROR] Invalid number for power.")
+                print("[ERROR] Invalid number format.")
             except Exception as ex:
                 print(f"[ERROR] {ex}")
 
@@ -288,16 +316,16 @@ def interactive_menu(server_url: str):
                 if use_existing != "n":
                     for a in reg_apps:
                         curr_name = a["appliance"]
-                        curr_pwr = a["power_kw"]
-                        p_str = input(f"Power for {curr_name} (kW) [Enter to keep {curr_pwr:.2f}]: ").strip()
+                        curr_enrg = a.get("energy", 0.0)
+                        p_str = input(f"Energy for {curr_name} (kWh) [Enter to keep {curr_enrg:.2f}]: ").strip()
                         if p_str:
                             try:
                                 apps[curr_name] = float(p_str)
                             except ValueError:
-                                print(f"Invalid input, keeping {curr_pwr:.2f} kW.")
-                                apps[curr_name] = curr_pwr
+                                print(f"Invalid input, keeping {curr_enrg:.2f} kWh.")
+                                apps[curr_name] = curr_enrg
                         else:
-                            apps[curr_name] = curr_pwr
+                            apps[curr_name] = curr_enrg
 
             # Option to add more appliances
             while True:
@@ -305,15 +333,17 @@ def interactive_menu(server_url: str):
                 name = input(prompt_text).strip()
                 if not name or name.lower() == "done":
                     break
-                p_str = input(f"Power for {name} (kW): ").strip()
+                p_str = input(f"Energy for {name} (kWh): ").strip()
                 try:
                     apps[name] = float(p_str)
                 except ValueError:
-                    print("Invalid power reading, skipping.")
+                    print("Invalid energy reading, skipping.")
 
             if apps:
+                temp_str = input("Enter outdoor temperature in °C (optional, press Enter to skip): ").strip()
+                outdoor_temp = float(temp_str) if temp_str else None
                 try:
-                    ven.report_multi_appliances(apps)
+                    ven.report_multi_appliances(apps, outdoor_temperature=outdoor_temp)
                 except Exception as ex:
                     print(f"[ERROR] {ex}")
             else:
@@ -323,10 +353,10 @@ def interactive_menu(server_url: str):
             try:
                 lb = ven.get_leaderboard()
                 print("\nLIVE LEADERBOARD STANDINGS:")
-                print(f"{'Rank':<6}{'Team Name':<22}{'Reports':<10}{'Avg kW':<10}")
-                print("-" * 50)
+                print(f"{'Rank':<6}{'Team Name':<22}{'Reports Ingested':<18}{'Active Appliances':<18}")
+                print("-" * 65)
                 for idx, t in enumerate(lb.get("leaderboard", []), start=1):
-                    print(f"{idx:<6}{t.get('team_name'):<22}{t.get('reports_count'):<10}{t.get('avg_power_kw', 0.0):<10.2f}")
+                    print(f"{idx:<6}{t.get('team_name'):<22}{t.get('reports_count'):<18}{t.get('active_appliances_count', 0):<18}")
             except Exception as ex:
                 print(f"[ERROR] {ex}")
 
@@ -340,12 +370,17 @@ def main():
     parser.add_argument("--token", default="", help="Your assigned team API token (e.g. KEY-TEAM01-A7F9)")
     parser.add_argument("--server", default="https://openadr-3-0.onrender.com", help="Organizer VTN server URL")
     parser.add_argument("--fetch-tariffs", action="store_true", help="Download direct JSON and CSV tariffs")
-    parser.add_argument("--report-power", type=float, default=None, help="Report power reading in kW")
+    parser.add_argument("--energy", type=float, default=None, help="Report energy reading in kWh")
+    parser.add_argument("--outdoor-temp", type=float, default=None, help="Report outdoor temperature in °C")
+    parser.add_argument("--report-power", type=float, default=None, help="Legacy alias: report reading in kWh")
     parser.add_argument("--appliance", default="Smart_AC", help="Appliance name")
     parser.add_argument("--list-appliances", action="store_true", help="List all registered appliances for this team")
     args = parser.parse_args()
 
-    if not args.token and args.report_power is None and not args.fetch_tariffs and not args.list_appliances:
+    # Fallback from legacy --report-power to --energy
+    energy_val = args.energy if args.energy is not None else args.report_power
+
+    if not args.token and energy_val is None and not args.fetch_tariffs and not args.list_appliances:
         interactive_menu(args.server)
         return
 
@@ -369,15 +404,16 @@ def main():
         if apps:
             print(f"\nRegistered Appliances for Team:")
             for a in apps:
-                print(f"  - {a['appliance']:<20}: {a['power_kw']:.2f} kW ({a.get('status', 'RUNNING')}) [Last: {a.get('timestamp')}]")
+                temp_str = f"{a.get('outdoor_temperature')}°C" if a.get('outdoor_temperature') is not None else "N/A"
+                print(f"  - {a['appliance']:<20}: {a.get('energy', 0.0):.2f} kWh (Temp: {temp_str}) [Time: {a.get('timestamp')}]")
         else:
             print("No appliances reported yet.")
 
     if args.fetch_tariffs:
         ven.get_tariffs(save_local=True)
 
-    if args.report_power is not None:
-        ven.report_power(power_kw=args.report_power, appliance=args.appliance)
+    if energy_val is not None:
+        ven.report_telemetry(energy=energy_val, outdoor_temperature=args.outdoor_temp, appliance=args.appliance)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Team, TelemetryRecord
+from .models import Team, TelemetryRecord, TariffInterval
 
 
 @admin.register(Team)
@@ -15,7 +15,14 @@ class TeamAdmin(admin.ModelAdmin):
 
 @admin.register(TelemetryRecord)
 class TelemetryRecordAdmin(admin.ModelAdmin):
-    list_display = ("id", "timestamp", "team", "appliance", "power_kw", "energy_kwh", "status")
-    list_filter = ("team", "appliance", "status")
+    list_display = ("id", "timestamp", "team", "appliance", "outdoor_temperature", "energy")
+    list_filter = ("team", "appliance")
     search_fields = ("team__team_name", "appliance", "notes")
     date_hierarchy = "timestamp"
+
+
+@admin.register(TariffInterval)
+class TariffIntervalAdmin(admin.ModelAdmin):
+    list_display = ("hour_index", "day_label", "start_time_ist", "price_per_kwh", "currency", "seed_used", "published_at")
+    list_filter = ("day_label", "seed_used")
+    ordering = ("hour_index",)

@@ -34,9 +34,8 @@ class Team(models.Model):
         if records is not None:
             return {
                 r.appliance: {
-                    "power_kw": r.power_kw,
-                    "energy_kwh": r.energy_kwh,
-                    "status": r.status,
+                    "energy": r.energy,
+                    "outdoor_temperature": r.outdoor_temperature,
                     "timestamp": r.timestamp.isoformat(),
                 }
                 for r in records
@@ -47,9 +46,8 @@ class Team(models.Model):
         for r in self.telemetry_records.order_by("-id"):
             if r.appliance not in app_dict:
                 app_dict[r.appliance] = {
-                    "power_kw": r.power_kw,
-                    "energy_kwh": r.energy_kwh,
-                    "status": r.status,
+                    "energy": r.energy,
+                    "outdoor_temperature": r.outdoor_temperature,
                     "timestamp": r.timestamp.isoformat(),
                 }
         return app_dict
@@ -57,10 +55,9 @@ class Team(models.Model):
 
 class TelemetryRecord(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="telemetry_records")
-    appliance = models.CharField(max_length=128)
-    power_kw = models.FloatField()
-    energy_kwh = models.FloatField(default=0.0)
-    status = models.CharField(max_length=64, default="RUNNING")
+    appliance = models.CharField(max_length=128, default="Default_Appliance")
+    outdoor_temperature = models.FloatField(null=True, blank=True)
+    energy = models.FloatField(default=0.0)
     notes = models.TextField(blank=True, default="")
     raw_payload = models.TextField(blank=True, default="")
     timestamp = models.DateTimeField()
@@ -73,4 +70,23 @@ class TelemetryRecord(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"{self.team.team_name} - {self.appliance} ({self.power_kw} kW)"
+        temp_str = f"{self.outdoor_temperature}°C" if self.outdoor_temperature is not None else "N/A"
+        return f"{self.team.team_name} - {self.appliance} (Energy: {self.energy}, Temp: {temp_str})"
+
+
+class TariffInterval(models.Model):
+    hour_index = models.IntegerField(unique=True)
+    day_label = models.CharField(max_length=32)
+    start_time = models.DateTimeField()
+    start_time_ist = models.CharField(max_length=64)
+    duration_hours = models.IntegerField(default=1)
+    price_per_kwh = models.FloatField()
+    currency = models.CharField(max_length=8, default="INR")
+    seed_used = models.IntegerField(null=True, blank=True)
+    published_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["hour_index"]
+
+    def __str__(self) -> str:
+        return f"Hour {self.hour_index} ({self.day_label}): INR {self.price_per_kwh:.2f}/kWh"

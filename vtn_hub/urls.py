@@ -5,6 +5,7 @@ urlpatterns = [
     path("", views.dashboard_view, name="dashboard"),
     path("api/v3/auth/verify", views.api_verify_token, name="api_verify_token"),
     path("api/v3/tariffs.json", views.api_tariffs_json, name="api_tariffs_json"),
+    path("api/v3/tariffs/publish", views.api_publish_tariffs, name="api_publish_tariffs"),
     path("api/v3/reports", views.api_reports, name="api_reports"),
     path("api/v3/appliances", views.api_appliances, name="api_appliances"),
     path("api/v3/leaderboard", views.api_leaderboard, name="api_leaderboard"),
