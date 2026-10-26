@@ -53,9 +53,15 @@
             <h1>OpenADR 3.0 Grid Competition Hub</h1>
             <p>Django Virtual Top Node (VTN) | Real-time Participant Telemetry</p>
         </div>
-        <div style="display:flex; align-items:center; gap:1rem;">
-            <a href="/admin/" target="_blank" class="btn btn-blue">Django Admin Portal</a>
-            <span style="color:#10b981; font-weight:600; font-size:0.85rem;">Server Online | Time: {{ live_ist_now }}</span>
+        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <a href="/analytics/" class="btn btn-blue" style="background:#0284c7;">📈 Team Charts & Analytics</a>
+            <a href="/admin/" target="_blank" class="btn btn-blue" style="background:#334155;">Django Admin</a>
+            <span style="color:#10b981; font-weight:600; font-size:0.85rem;">Live IST: {{ live_ist_now }}</span>
+            <div style="display:inline-flex; align-items:center; gap:0.5rem; background:#1e293b; padding:5px 12px; border-radius:6px; font-size:0.82rem;">
+                <span style="color:#94a3b8;">Admin:</span>
+                <strong style="color:#f8fafc;">{{ request.user.username|default:"admin" }}</strong>
+                <a href="/logout/" style="color:#f87171; text-decoration:none; margin-left:6px; font-weight:600;">Sign Out</a>
+            </div>
         </div>
     </div>
 
@@ -70,33 +76,56 @@
             <span class="stat-val" style="color: #facc15;">{{ total_active_appliances }}</span>
         </div>
         <div class="stat-item" style="border-left: 1px solid #1e293b; padding-left: 1.5rem;">
-            <span class="stat-label">Telemetry Ingested</span>
-            <span class="stat-val" style="color: #a78bfa;">{{ total_telemetry_reports }}</span>
+            <span class="stat-label">Baseline Entries</span>
+            <span class="stat-val" style="color: #38bdf8;">{{ total_baseline_entries }}</span>
+        </div>
+        <div class="stat-item" style="border-left: 1px solid #1e293b; padding-left: 1.5rem;">
+            <span class="stat-label">Total Data Entries</span>
+            <span class="stat-val" style="color: #a78bfa;">{{ total_data_entries }}</span>
         </div>
     </div>
 
     <!-- 1-Click Direct Downloads -->
     <div class="actions">
         <a href="/download/tariffs.csv" class="btn btn-green">Download 2-Day Ahead Tariffs (CSV - IST)</a>
-        <a href="/download/telemetry.csv" class="btn btn-purple">Download All Team Telemetry (CSV)</a>
+        <a href="/download/baseline-data.csv" class="btn btn-purple">Download Baseline & Prototype Data (CSV)</a>
     </div>
 
     <!-- Clean Team Roster Table -->
     <div class="card">
-        <h2>Teams & Registered Appliances</h2>
+        <h2>Teams & Competition Progress (3 Phases)</h2>
         <div class="table-scroll">
             <table>
                 <thead>
                     <tr>
-                        <th style="min-width: 140px;">Team Name</th>
-                        <th style="min-width: 420px;">Appliances</th>
-                        <th style="min-width: 120px; text-align:center;">Reports Ingested</th>
+                        <th style="min-width: 130px;">Team Name</th>
+                        <th style="min-width: 110px; text-align:center;">Phase 1: Testing</th>
+                        <th style="min-width: 140px; text-align:center;">Tariff Received</th>
+                        <th style="min-width: 110px; text-align:center;">Phase 2: Baseline</th>
+                        <th style="min-width: 110px; text-align:center;">Phase 3: Prototype</th>
+                        <th style="min-width: 320px;">Active Appliances</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for t in teams %}
                     <tr>
                         <td style="white-space:nowrap;"><strong>{{ t.team_name }}</strong></td>
+                        <td style="text-align:center;">
+                            {% if t.has_tested %}
+                            <span class="status-active">Tested ({{ t.testing_count }})</span>
+                            {% else %}
+                            <span class="status-awaiting">Pending</span>
+                            {% endif %}
+                        </td>
+                        <td style="text-align:center; font-size:0.8rem; color:#94a3b8;">
+                            {% if t.last_tariff_fetched %}
+                            <span style="color:#10b981; font-weight:600;">{{ t.last_tariff_fetched }}</span>
+                            {% else %}
+                            <span style="color:#64748b;">Not Yet</span>
+                            {% endif %}
+                        </td>
+                        <td style="text-align:center; font-weight:600; color:#38bdf8;">{{ t.baseline_count }}</td>
+                        <td style="text-align:center; font-weight:600; color:#a78bfa;">{{ t.prototype_count }}</td>
                         <td>
                             {% if t.appliances %}
                             <div class="app-wrap">
@@ -114,11 +143,10 @@
                             <span style="color:#64748b; font-size:0.8rem; font-style:italic;">None</span>
                             {% endif %}
                         </td>
-                        <td style="text-align:center; font-weight:600;">{{ t.total_reports }}</td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="3" style="text-align:center; color:#94a3b8;">No teams registered.</td>
+                        <td colspan="6" style="text-align:center; color:#94a3b8;">No teams registered.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -126,13 +154,14 @@
         </div>
     </div>
 
-    <!-- Recent Telemetry Log -->
+    <!-- Recent Data Activity Feed -->
     <div class="card">
-        <h2>Latest Incoming Telemetry Feed</h2>
+        <h2>Latest Data Activity (Testing, Baseline, Prototype)</h2>
         <table>
             <thead>
                 <tr>
                     <th>Time (IST)</th>
+                    <th>Phase</th>
                     <th>Team Name</th>
                     <th>Appliance</th>
                     <th>Outdoor Temperature</th>
@@ -143,6 +172,7 @@
                 {% for r in recent_telemetry %}
                 <tr>
                     <td><small>{{ r.timestamp|date:"Y-m-d H:i:s" }} IST</small></td>
+                    <td><span class="val-badge" style="color:{% if r.phase == 'baseline' %}#38bdf8{% elif r.phase == 'prototype' %}#a78bfa{% else %}#10b981{% endif %}; font-weight:600;">{{ r.phase|title }}</span></td>
                     <td><strong>{{ r.team.team_name }}</strong></td>
                     <td><span class="val-badge">{{ r.appliance }}</span></td>
                     <td style="color:#f59e0b; font-weight:600;">
@@ -155,23 +185,36 @@
                     <td style="color:#38bdf8; font-weight:700;">{{ r.energy }} kWh</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="5" style="color:#94a3b8; text-align:center;">No telemetry reported yet.</td></tr>
+                <tr><td colspan="6" style="color:#94a3b8; text-align:center;">No data received yet.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 
-    <!-- Connection Instructions -->
+    <!-- Connection Instructions: 3 Student Phases -->
     <div class="card">
-        <h2>Connection Endpoints for Participants</h2>
-        <p style="color: #94a3b8; font-size: 0.85rem;">1. Download 2-Day Ahead Tariffs JSON:</p>
-        <div class="code-box">GET /api/v3/tariffs.json?token=YOUR_ASSIGNED_TOKEN</div>
-
-        <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 1rem;">2. Report Telemetry:</p>
-        <div class="code-box">POST /api/v3/reports?token=YOUR_ASSIGNED_TOKEN
+        <h2>Student API Instructions (Testing, Baseline, Prototype, Tariffs)</h2>
+        
+        <p style="color: #10b981; font-weight:600; font-size: 0.88rem; margin-top: 0.5rem;">Phase 1: Testing API (Send Test Data to Verify Connection)</p>
+        <div class="code-box">POST /api/v3/testing?token=YOUR_ASSIGNED_TOKEN
 Content-Type: application/json
 
-{"appliance": "Water_Heater", "energy": 2.10, "outdoor_temperature": 28.5}</div>
+{"appliance": "Smart_AC", "energy": 1.5, "outdoor_temperature": 31.0}</div>
+
+        <p style="color: #38bdf8; font-weight:600; font-size: 0.88rem; margin-top: 1.25rem;">Phase 2: Baseline API (2-Week Active Period - 15-Minute Capped Intervals)</p>
+        <div class="code-box">POST /api/v3/baseline?token=YOUR_ASSIGNED_TOKEN
+Content-Type: application/json
+
+{"appliances": {"Smart_AC": 1.85, "EV_Charger": 3.20}, "outdoor_temperature": 32.5}</div>
+
+        <p style="color: #a78bfa; font-weight:600; font-size: 0.88rem; margin-top: 1.25rem;">Phase 3: Prototype Posting API (Posting Optimized Product Loads - 15-Minute Capped Intervals)</p>
+        <div class="code-box">POST /api/v3/prototype?token=YOUR_ASSIGNED_TOKEN
+Content-Type: application/json
+
+{"appliances": {"Smart_AC": 1.10, "EV_Charger": 0.0}, "notes": "Shifted off peak tariff"}</div>
+
+        <p style="color: #facc15; font-weight:600; font-size: 0.88rem; margin-top: 1.25rem;">Dynamic Tariffs API (Continuous 48-Hour Day-Ahead Prices - Always Active for 7+ Months)</p>
+        <div class="code-box">GET /api/v3/tariffs?token=YOUR_ASSIGNED_TOKEN</div>
     </div>
 </body>
 </html>

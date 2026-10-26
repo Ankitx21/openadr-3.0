@@ -60,14 +60,6 @@ DATABASES = {
     }
 }
 
-# Optional: If DATABASE_URL is present, connect via dj_database_url
-if os.environ.get("DATABASE_URL"):
-    try:
-        import dj_database_url
-        DATABASES["default"] = dj_database_url.config(conn_max_age=600, ssl_require=True)
-    except ImportError:
-        pass
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

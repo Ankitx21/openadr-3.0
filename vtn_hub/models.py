@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from django.db import connection, models
+from django.db import models
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
@@ -11,6 +11,7 @@ class Team(models.Model):
     token = models.CharField(max_length=64, unique=True)
     first_connected_at = models.DateTimeField(null=True, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
+    last_tariff_fetched_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -23,51 +24,57 @@ class Team(models.Model):
     def is_connected(self) -> bool:
         return bool(self.first_connected_at)
 
-    def get_latest_appliances(self):
-        """Return dict of latest reading per appliance for this team."""
-        records = (
-            self.telemetry_records.order_by("appliance", "-id")
-            .distinct("appliance")
-            if "postgresql" in connection.vendor
-            else None
-        )
-        if records is not None:
-            return {
-                r.appliance: {
-                    "energy": r.energy,
-                    "outdoor_temperature": r.outdoor_temperature,
-                    "timestamp": r.timestamp.isoformat(),
-                }
-                for r in records
-            }
-
-        # Fallback for SQLite
+    def get_latest_appliances(self, phase: str = "baseline"):
+        """Return dict of latest reading per appliance for this team and phase."""
         app_dict = {}
-        for r in self.telemetry_records.order_by("-id"):
+        for r in self.telemetry_records.filter(phase=phase).order_by("-id"):
             if r.appliance not in app_dict:
                 app_dict[r.appliance] = {
                     "energy": r.energy,
                     "outdoor_temperature": r.outdoor_temperature,
                     "timestamp": r.timestamp.isoformat(),
+                    "phase": r.phase,
                 }
         return app_dict
 
 
+def snap_to_15min_interval(dt: datetime) -> datetime:
+    """Snaps a timestamp forward to the nearest 15-minute interval end boundary.
+    Safely rolls over 60 minutes into the next hour/day via timedelta arithmetic.
+    """
+    dt = dt.replace(microsecond=0)
+    seconds_in_current_block = (dt.minute % 15) * 60 + dt.second
+    if seconds_in_current_block == 0:
+        return dt
+    needed_seconds = (15 * 60) - seconds_in_current_block
+    return dt + timedelta(seconds=needed_seconds)
+
+
 class TelemetryRecord(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="telemetry_records")
+    phase = models.CharField(max_length=32, default="baseline", db_index=True)
     appliance = models.CharField(max_length=128, default="Default_Appliance")
     outdoor_temperature = models.FloatField(null=True, blank=True)
     energy = models.FloatField(default=0.0)
     notes = models.TextField(blank=True, default="")
     raw_payload = models.TextField(blank=True, default="")
     timestamp = models.DateTimeField()
+    interval_timestamp = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ["-id"]
         indexes = [
+            models.Index(fields=["team", "phase"]),
             models.Index(fields=["team", "appliance"]),
             models.Index(fields=["timestamp"]),
+            models.Index(fields=["team", "interval_timestamp"]),
+            models.Index(fields=["team", "phase", "interval_timestamp"]),
         ]
+
+    def save(self, *args, **kwargs):
+        if not self.interval_timestamp and self.timestamp:
+            self.interval_timestamp = snap_to_15min_interval(self.timestamp)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         temp_str = f"{self.outdoor_temperature}°C" if self.outdoor_temperature is not None else "N/A"

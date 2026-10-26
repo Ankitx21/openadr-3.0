@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organizer Portal Login | OpenADR 3.0 VTN</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #090d16;
+            color: #f1f5f9;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+
+        .login-card {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 420px;
+            padding: 2.25rem 2rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+        }
+
+        .brand-badge {
+            display: inline-block;
+            background: rgba(56, 189, 248, 0.12);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #f8fafc;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.4rem;
+        }
+
+        p.subtitle {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            line-height: 1.45;
+            margin-bottom: 1.75rem;
+        }
+
+        .alert-error {
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            color: #f87171;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-bottom: 0.45rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            background: #0b1120;
+            border: 1px solid #334155;
+            color: #f8fafc;
+            padding: 0.7rem 0.95rem;
+            border-radius: 6px;
+            font-size: 0.92rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+        }
+
+        .btn-submit {
+            width: 100%;
+            background: #0284c7;
+            color: #ffffff;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.15s;
+            margin-top: 0.5rem;
+        }
+
+        .btn-submit:hover {
+            background: #0369a1;
+        }
+
+        .btn-submit:active {
+            background: #075985;
+        }
+
+        .helper-box {
+            background: #0b1120;
+            border: 1px dashed #334155;
+            border-radius: 6px;
+            padding: 0.75rem 0.9rem;
+            margin-top: 1.5rem;
+            font-size: 0.78rem;
+            color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .helper-box code {
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.82rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand-badge">OpenADR 3.0 VTN</div>
+        <h1>Organizer Portal</h1>
+        <p class="subtitle">Enter administrative credentials to access competition telemetry, analytics, and team monitoring.</p>
+
+        {% if error %}
+        <div class="alert-error">
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login/">
+            {% csrf_token %}
+            {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+            {% endif %}
+
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" value="{{ username|default:'' }}" required autofocus placeholder="admin">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required placeholder="••••••••">
+            </div>
+
+            <button type="submit" class="btn-submit">Sign In to Dashboard</button>
+        </form>
+
+        <div class="helper-box">
+            <span>Default Organizer:</span>
+            <span><code>admin</code> / <code>admin123</code></span>
+        </div>
+    </div>
+</body>
+</html>

@@ -44,58 +44,73 @@ curl -X GET "https://your-server.onrender.com/api/v3/tariffs.json?token=YOUR_ASS
 
 ---
 
-## 3. Reporting Telemetry for Multiple Appliances & Microcontrollers
+---
 
-A team can have multiple appliances, each controlled by its own microcontroller (e.g., separate ESP32s on AC, Water Heater, and EV Charger) using the same team token.
+## 3. Student Competition Lifecycle (3 Phases)
 
-### Rate Limiting Rules
-To prevent accidental infinite loops from microcontrollers:
-1. **Per-Appliance Minimum Interval**: Minimum **2 seconds** required between reports for the same appliance.
-2. **Team Burst Limit**: Maximum **60 reports per minute** across all microcontrollers for a team.
-3. Exceeding these limits returns `HTTP 429 Too Many Requests`.
+The competition is structured into 3 distinct phases, with rolling dynamic tariffs continuously available throughout:
 
-### Python Integration
-```python
-from openadr3_client import TeamVen
+### Continuous: Fetching Dynamic Tariffs
+Day-Ahead dynamic tariffs (today + tomorrow) are always live and updated continuously on the server:
+```bash
+# Using Python Client
+python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --fetch-tariffs
 
-ven = TeamVen(token="KEY-TEAM01-A7F9", server_url="https://your-server.onrender.com")
+# Or direct HTTP GET
+curl -X GET "https://your-server.onrender.com/api/v3/tariffs?token=YOUR_ASSIGNED_TOKEN"
+```
 
-# 1. Fetch 2-Day Ahead Tariffs
-tariffs = ven.get_tariffs()
+### Phase 1: Connection & Data Testing
+Students check connectivity and test data transmission with the server. Testing records are stored for reference so organizers can verify your connection:
+```bash
+python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --test --appliance Smart_AC --energy 1.5 --outdoor-temp 30.5
+```
+Direct HTTP POST:
+```bash
+curl -X POST "https://your-server.onrender.com/api/v3/testing?token=YOUR_ASSIGNED_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"appliance": "Smart_AC", "energy": 1.5, "outdoor_temperature": 30.5}'
+```
 
-# 2. Report from an individual microcontroller/appliance
-ven.report_power(power_kw=1.85, appliance="Smart_AC", status="RUNNING")
+### Phase 2: Baseline Data (2-Week Active Period)
+During the 2-week active competition period, submit regular baseline energy data. Readings are automatically snapped to 15-minute intervals:
+```bash
+python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --baseline 2.10 --appliance Smart_AC --outdoor-temp 32.0
+```
+Direct HTTP POST:
+```bash
+curl -X POST "https://your-server.onrender.com/api/v3/baseline?token=YOUR_ASSIGNED_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"appliances": {"Smart_AC": 2.10, "EV_Charger": 3.40}, "outdoor_temperature": 32.0}'
+```
 
-# 3. Or report multiple appliances simultaneously
-ven.report_multi_appliances({
-    "Smart_AC": 1.5,
-    "Water_Heater": 2.1,
-    "EV_Charger": 3.2
-})
+### Phase 3: Prototype Product Posting (Actual Ready Product)
+When your smart optimization algorithm or hardware is ready, post your tariff-optimized load data:
+```bash
+python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --prototype 1.15 --appliance Smart_AC
+```
+Direct HTTP POST:
+```bash
+curl -X POST "https://your-server.onrender.com/api/v3/prototype?token=YOUR_ASSIGNED_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"appliances": {"Smart_AC": 1.15, "EV_Charger": 0.0}, "notes": "Shifted load off evening peak"}'
 ```
 
 ---
 
-## 4. Hardware Implementation (ESP32 / MicroPython)
-
-- **ESP32 (Arduino C++)**: See [`esp32_example.ino`](file:///d:/openADR/openadr3_competition/team_kit/esp32_example.ino). Includes a built-in timer loop reporting every 15 minutes to respect rate limits.
-- **MicroPython (Raspberry Pi Pico W / ESP32)**: See [`micropython_example.py`](file:///d:/openADR/openadr3_competition/team_kit/micropython_example.py).
+## 4. Rate Limiting Rules
+To maintain server performance and prevent accidental loops from microcontrollers:
+1. **Per-Appliance Cooldown**: Minimum **2 seconds** required between submissions for the same appliance.
+2. **Team Minute Limit**: Maximum **20 submissions per minute** across all microcontrollers for a team.
+3. **Team Hourly Limit**: Maximum **60 submissions per hour** across all microcontrollers for a team.
+4. Exceeding limits returns `HTTP 429 Too Many Requests`.
 
 ---
 
-## 5. Analyzing Tariffs with Pandas
+## 5. Hardware Implementation (ESP32 / MicroPython)
 
-```python
-import pandas as pd
-
-df = pd.read_csv("tariffs_received.csv")
-print("Average Tariff : INR", df["price_per_kwh"].mean())
-print("Peak Tariff    : INR", df["price_per_kwh"].max())
-
-cheapest_4_hours = df.sort_values(by="price_per_kwh").head(4)
-print("\nCheapest 4 hours to charge / pre-cool:")
-print(cheapest_4_hours[["start_time", "price_per_kwh"]])
-```
+- **ESP32 (Arduino C++)**: See [`esp32_example.ino`](file:///d:/openADR/openadr_django/team_kit/esp32_example.ino). Includes a 15-minute interval timer loop.
+- **MicroPython (Raspberry Pi Pico W / ESP32)**: See [`micropython_example.py`](file:///d:/openADR/openadr_django/team_kit/micropython_example.py).
 
 ---
 
@@ -103,7 +118,10 @@ print(cheapest_4_hours[["start_time", "price_per_kwh"]])
 
 | Action | Method | Endpoint | Description |
 | :--- | :--- | :--- | :--- |
-| 2-Day Ahead Tariffs | GET | `/api/v3/tariffs.json?token=KEY` | 48 hourly intervals (Today + Tomorrow) |
-| List Registered Appliances | GET | `/api/v3/appliances?token=KEY` | Returns all team appliances & last kW readings |
-| Submit Telemetry | POST | `/api/v3/reports?token=KEY` | Ingests single or multi-appliance power |
-| Live Standings | GET | `/api/v3/leaderboard` | View rankings across the authorized teams |
+| Dynamic Tariffs | GET | `/api/v3/tariffs?token=KEY` | Continuous 48 hourly intervals (Today + Tomorrow) |
+| Phase 1: Testing | POST | `/api/v3/testing?token=KEY` | Verify client-server connection and data sending |
+| Phase 2: Baseline Data | POST | `/api/v3/baseline?token=KEY` | 2-week baseline competition data (15-min intervals) |
+| Phase 3: Prototype Posting | POST | `/api/v3/prototype?token=KEY` | Post smart tariff-optimized device loads |
+| 15-Min Interval Data | GET | `/api/v3/baseline/intervals` | Query interval profiles for charts and analysis |
+| List Registered Appliances | GET | `/api/v3/appliances?token=KEY` | Returns team appliances and latest energy readings |
+| Live Standings | GET | `/api/v3/leaderboard` | View baseline & prototype progress rankings |

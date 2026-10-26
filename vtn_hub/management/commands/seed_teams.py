@@ -44,10 +44,17 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f"Seeded {created_cnt} new teams ({Team.objects.count()} total)."))
 
-        # 2. Seed superuser admin / admin123 if not exists
+        # 2. Seed superuser admin / admin123
         User = get_user_model()
-        if not User.objects.filter(username="admin").exists():
-            User.objects.create_superuser("admin", "admin@openadr.local", "admin123")
+        admin_user, created = User.objects.get_or_create(
+            username="admin",
+            defaults={"email": "admin@openadr.local", "is_staff": True, "is_superuser": True},
+        )
+        admin_user.set_password("admin123")
+        admin_user.is_staff = True
+        admin_user.is_superuser = True
+        admin_user.save()
+        if created:
             self.stdout.write(self.style.SUCCESS("Superuser created: admin / admin123"))
         else:
-            self.stdout.write(self.style.SUCCESS("Superuser 'admin' already present."))
+            self.stdout.write(self.style.SUCCESS("Superuser 'admin' verified with password 'admin123'."))
