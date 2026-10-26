@@ -306,7 +306,9 @@ def interactive_menu(server_url: str):
                 print(f"[ERROR] {ex}")
 
         elif choice == "2":
-            app = input("Enter test appliance name [Default: Test_Appliance]: ").strip() or "Test_Appliance"
+            app = input("Enter your custom appliance name (e.g. Inverter_AC, Geyser, EV_Charger): ").strip()
+            while not app:
+                app = input("Appliance name cannot be empty. Please enter appliance name: ").strip()
             enrg_str = input("Enter test energy in kWh [Default: 1.5]: ").strip() or "1.5"
             temp_str = input("Enter test outdoor temperature in °C [Default: 30.0]: ").strip() or "30.0"
             try:
@@ -329,16 +331,16 @@ def interactive_menu(server_url: str):
                     if 1 <= sel_num <= len(reg_apps):
                         app = reg_apps[sel_num - 1]["appliance"]
                     elif sel_num == new_idx:
-                        app = input("Enter new Appliance Name (e.g. EV_Charger, Geyser): ").strip()
+                        app = input("Enter new custom appliance name: ").strip()
+                        while not app:
+                            app = input("Appliance name cannot be empty: ").strip()
                 except ValueError:
                     print("Invalid selection.")
                     continue
             else:
-                app = input("Enter Appliance Name (e.g. Smart_AC, Geyser, EV) [Default: Smart_AC]: ").strip() or "Smart_AC"
-
-            if not app:
-                print("Appliance name cannot be empty.")
-                continue
+                app = input("Enter your custom appliance name: ").strip()
+                while not app:
+                    app = input("Appliance name cannot be empty. Please enter appliance name: ").strip()
 
             enrg_str = input(f"Enter energy consumption for {app} in kWh: ").strip()
             try:
@@ -353,7 +355,9 @@ def interactive_menu(server_url: str):
                 print(f"[ERROR] {ex}")
 
         elif choice == "4":
-            app = input("Enter Prototype / Product appliance name [Default: Smart_AC]: ").strip() or "Smart_AC"
+            app = input("Enter your custom prototype appliance name: ").strip()
+            while not app:
+                app = input("Appliance name cannot be empty. Please enter appliance name: ").strip()
             enrg_str = input("Enter optimized energy load in kWh: ").strip()
             try:
                 enrg = float(enrg_str)
@@ -435,7 +439,7 @@ def main():
     parser.add_argument("--prototype", type=float, default=None, help="Phase 3: Post prototype load reading in kWh to /api/v3/prototype")
     parser.add_argument("--energy", type=float, default=None, help="Energy reading in kWh (defaults to Phase 2 baseline)")
     parser.add_argument("--outdoor-temp", type=float, default=None, help="Outdoor temperature in °C")
-    parser.add_argument("--appliance", default="Smart_AC", help="Appliance name")
+    parser.add_argument("--appliance", default=None, help="Your custom appliance name")
     parser.add_argument("--list-appliances", action="store_true", help="List registered appliances for this team")
     args = parser.parse_args()
 
@@ -455,7 +459,8 @@ def main():
         print("Invalid token.")
         return
 
-    ven = TeamVen(token=args.token, server_url=args.server, appliance_type=args.appliance)
+    app_name = args.appliance or "Custom_Appliance"
+    ven = TeamVen(token=args.token, server_url=args.server, appliance_type=app_name)
 
     try:
         ven.verify_token()
@@ -468,7 +473,7 @@ def main():
 
     if args.test_mode:
         enrg = args.energy if args.energy is not None else 1.5
-        ven.send_testing(energy=enrg, outdoor_temperature=args.outdoor_temp or 30.0, appliance=args.appliance)
+        ven.send_testing(energy=enrg, outdoor_temperature=args.outdoor_temp or 30.0, appliance=app_name)
         return
 
     if args.fetch_tariffs:
@@ -485,11 +490,11 @@ def main():
             print("No appliances reported yet.")
 
     if args.baseline is not None:
-        ven.send_baseline(energy=args.baseline, outdoor_temperature=args.outdoor_temp, appliance=args.appliance)
+        ven.send_baseline(energy=args.baseline, outdoor_temperature=args.outdoor_temp, appliance=app_name)
     elif args.prototype is not None:
-        ven.send_prototype(energy=args.prototype, outdoor_temperature=args.outdoor_temp, appliance=args.appliance)
+        ven.send_prototype(energy=args.prototype, outdoor_temperature=args.outdoor_temp, appliance=app_name)
     elif args.energy is not None:
-        ven.send_baseline(energy=args.energy, outdoor_temperature=args.outdoor_temp, appliance=args.appliance)
+        ven.send_baseline(energy=args.energy, outdoor_temperature=args.outdoor_temp, appliance=app_name)
 
 
 if __name__ == "__main__":

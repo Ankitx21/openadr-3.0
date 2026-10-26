@@ -194,9 +194,6 @@
             <span class="filter-label" style="margin-left:0.5rem;">Appliance:</span>
             <select id="applianceSelect" onchange="loadTeamData()">
                 <option value="all">All Appliances (Multi-Series)</option>
-                {% for app in all_appliances %}
-                <option value="{{ app }}">{{ app }}</option>
-                {% endfor %}
             </select>
 
             <span class="filter-label" style="margin-left:0.5rem;">Phase:</span>
@@ -308,10 +305,28 @@
                 document.getElementById("metricPeakEnergy").textContent = data.stats.peak_interval_kwh + " kWh";
                 document.getElementById("metricAvgTemp").textContent = data.stats.avg_temp_c ? data.stats.avg_temp_c + " °C" : "N/A";
 
+                // Update Dynamic Appliance Dropdown for this specific team
+                updateApplianceDropdown(data.appliances, appliance);
+
                 renderUnifiedChart(data);
                 renderTable(data.table_rows);
             } catch (err) {
                 console.error("Failed to load team data:", err);
+            }
+        }
+
+        function updateApplianceDropdown(appliances, currentSelection) {
+            const select = document.getElementById("applianceSelect");
+            const prevVal = currentSelection || select.value || "all";
+            select.innerHTML = '<option value="all">All Appliances (Multi-Series)</option>';
+            if (appliances && appliances.length > 0) {
+                appliances.forEach(app => {
+                    const opt = document.createElement("option");
+                    opt.value = app;
+                    opt.textContent = app;
+                    if (app === prevVal) opt.selected = true;
+                    select.appendChild(opt);
+                });
             }
         }
 

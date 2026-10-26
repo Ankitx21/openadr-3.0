@@ -227,6 +227,11 @@ def run_django_tests():
     assert team1.last_tariff_fetched_at is not None
     print("[PASS] 15. Rolling Tariffs API & team tariff receipt tracking verified.")
 
+    # Clean up test artifacts so database remains completely clean (zero dummy records)
+    TelemetryRecord.objects.all().delete()
+    Team.objects.all().update(first_connected_at=None, last_connected_at=None, last_tariff_fetched_at=None)
+    print("[CLEAN] Database cleanly restored to 0 telemetry records.")
+
     print("\n=======================================================")
     print(" ALL 15 DJANGO VTN TEST STEPS PASSED SUCCESSFULLY! ")
     print("=======================================================")
