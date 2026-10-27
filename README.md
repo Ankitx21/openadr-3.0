@@ -1,58 +1,72 @@
 # OpenADR 3.0
 
-Authenticated dashboard for organizers, juries, and teams. Device API tokens stay independent from dashboard passwords. The previously public homepage and chart/download endpoints now require a dashboard login or an appropriate team API token.
+Organizer/jury dashboard and isolated team analytics. The competition owner assigns dashboard credentials through server configuration. There are no web pages for creating accounts, listing dashboard accounts, resetting/changing passwords, or accessing Django admin. These URLs return 404 even to an organizer or superuser.
 
-## Account roles and testing on Render
+## Predefined login IDs
 
-| Role | Dashboard access | Data access | Management |
-| --- | --- | --- | --- |
-| Organizer | Competition overview and all analytics | All teams; all phases; all CSV exports | Create/reset/disable dashboard accounts; manage teams; organizer actions |
-| Jury | Competition overview and all analytics | Read-only across teams and phases; CSV exports | Own password only |
-| Team | Directly to its own analytics; no team dropdown | Only its assigned team, across testing/baseline/prototype; own exports and tariff graph/download | Own password only; no dashboard telemetry mutations |
+The Render build already runs `python manage.py seed_teams`, which also reads the private `DASHBOARD_PASSWORDS_JSON` environment variable to provision dashboard logins. No passwords are embedded in application source.
 
-Open `/login/` after Render deploys this commit. **Existing organizer staff/superuser usernames and passwords continue to work.** Existing API tokens and telemetry are preserved by the migration. If you need a new organizer account, set DJANGO_SUPERUSER_USERNAME to a new username, DJANGO_SUPERUSER_PASSWORD to a strong password, and optional DJANGO_SUPERUSER_EMAIL in Render Environment, then choose Save, rebuild, and deploy. Seeding only creates missing users; it never resets an existing password.
+| Login ID | Access |
+| --- | --- |
+| `admin` | Organizer: all teams and phases |
+| `organizer` | Organizer: all teams and phases |
+| `jury` | Read-only across all teams and phases |
+| `team01` | Team-01 only |
+| `team02` | Team-02 only |
+| ... | ... |
+| `team20` | Team-20 only |
 
-To test Team-01:
+Open `/login/`, enter the assigned ID and privately assigned password, and proceed directly to the dashboard. No first-login password change is required. The login page does not list passwords or provide reset links. Team logins land on their own analytics without a team selector. Each team has at most one dashboard account; old UI-created aliases for a predefined team are retired when the owner provisions its fixed login.
 
-1. Sign in as an organizer and open **Dashboard accounts** in the sidebar (`/accounts/`).
-2. Create username `team01`, role **Team**, team **Team-01**, and a strong temporary password. Do not use the API token as the password.
-3. Open a private/incognito window, sign in with `team01` and that temporary password, then complete the required password change.
-4. You land on Team-01 analytics with only its name and data. Phase, appliance, and time filters remain available. The overview redirects to your analytics; another team's URL or request parameter returns 403.
-5. Create a **Jury** account the same way, leaving Team blank. Its dashboard shows every team but offers no account/team administration or API write access.
+Dashboard passwords are unrelated to device API tokens and are stored as Django hashes in SQLite. Team/jury dashboard sessions cannot submit telemetry or modify tariffs. Devices continue using their independent bearer tokens without a dashboard-session cookie. API tokens and telemetry are not modified by dashboard provisioning.
 
-No role selector is required on the login page. Role and team identity come from server-side account records, not client input. Each team has at most one dashboard account. Passwords use Django password hashing/validation. New dashboard accounts require a password change on first sign-in; organizers can issue a new temporary password or disable an account through Dashboard accounts. Resets invalidate previous dashboard sessions. Disabling a dashboard account does not disable its independent device token. Use token rotation separately when revoking devices.
+## Owner-only password assignment
 
-Django admin stays organizer-only. Passwords and API tokens are never included in team page responses or exports. Team and jury dashboard sessions have read-only data API access, even if they attach a token to a POST. Device clients should use bearer tokens without a dashboard-session cookie; they retain the existing testing/baseline/prototype submission APIs. Session/account mutations require CSRF protection and logout uses POST. First-login password enforcement also applies to the chart API, exports, and Django admin.
+Only someone with access to the Render environment or service shell can change the assignment. There is no credential-management HTTP endpoint, including under `/admin/`.
 
-The current free Render SQLite setup is for testing: dashboard accounts created at runtime, including their changed passwords, can be lost on a redeploy/restart just like telemetry. No local database or test credentials are uploaded by this commit. For durable accounts and data, plan persistent storage separately.
+To assign or replace a password, add a Render environment variable named `DASHBOARD_PASSWORDS_JSON`. Its value is a JSON object mapping login IDs to passwords, for example:
 
-## Existing Render test deployment
+```json
+{"team01":"replace-with-your-private-password"}
+```
 
-This repository is itself the Django service root. Leave Render's Root Directory blank. Use the existing SQLite database (`db.sqlite3`); no PostgreSQL or Redis service is required. Keep the service's existing SECRET_KEY and DEBUG=False environment variables. The Render hostname is allowed automatically. For a custom domain add its hostname to ALLOWED_HOSTS.
+Select **Save, rebuild, and deploy**. Only listed logins are created or updated. Without the variable, no credentials are created or changed and existing users keep their passwords. Values must be 8-128 characters and must differ from the team's API token. Do not commit the actual variable value to GitHub or share it in application logs. Passwords are never printed by the seed command.
 
-Build command:
+The private environment variable is the source of truth: each build reapplies only the assignments it contains. Changing an assigned password invalidates the user's existing sessions. If you use `changepassword` in a private shell, also update the environment override so a later build does not revert it. Historical DJANGO_SUPERUSER_* bootstrap variables no longer control these predefined credentials.
+
+Owner commands:
+
+```sh
+python manage.py seed_teams
+python manage.py seed_dashboard_logins
+python manage.py rotate_team_token Team-01
+```
+
+The first creates missing teams and applies logins; the second applies logins to existing teams only. Token rotation is a separate, deliberate owner action. `audit_credentials` remains a manual diagnostic for weak test credentials; it is not part of deployment.
+
+## Existing Render SQLite test deployment
+
+The repository itself is the service root: leave Root Directory blank. No PostgreSQL or Redis service is required. Keep SECRET_KEY and DEBUG=False. The Render hostname is allowed automatically; custom hostnames go in ALLOWED_HOSTS.
+
+Build:
 
 ```sh
 pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate && python manage.py seed_teams
 ```
 
-Start command:
+Start:
 
 ```sh
 gunicorn openadr_django.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
 ```
 
-The included `gunicorn.conf.py` also selects a single worker when Redis is absent, even if the existing Render start command still specifies two workers. Threads share the in-memory cache and its request limits. Use a single Render service instance for this test setup. Limits reset when its worker restarts. REDIS_URL remains optional for future shared-cache deployments; it is not needed for this test.
+`gunicorn.conf.py` also selects one worker when Redis is absent, including when an existing Render start command still requests two workers. Threads share in-memory request limits, which reset on worker restart. Use one service instance for this test setup. REDIS_URL is optional for future shared-cache deployments.
 
-The blueprint uses the existing free web-service plan and creates no additional databases or cache services. An existing manually configured Render service may keep its saved build/start commands; compare them to the commands above. Pushing main may automatically deploy when Render auto-deploy is enabled.
+The blueprint uses the existing free plan and adds no database/cache services. The current SQLite filesystem is temporary: runtime telemetry can disappear after a restart/redeploy. Accounts listed in the private environment variable are recreated from the owner-controlled setup on each build. No local database or telemetry exports are uploaded by a source push. Durable storage can be configured later. See [Render filesystem documentation](https://render.com/docs/disks).
 
-SQLite on Render's default filesystem is temporary. Runtime data can disappear on redeploys/restarts, as with the original test setup. This update does not transfer a live database from Render or upload your local test database. Back up any trial data you need before redeploying. Durable production storage can be configured separately later. See [Render filesystem documentation](https://render.com/docs/disks).
+## Local run
 
-Seeding creates only missing teams with random tokens and never resets existing passwords or tokens. The already-tracked original SQLite snapshot remains unchanged by this update. Existing demo credentials continue working for process testing; change them before exposing the service beyond that trial. Use `python manage.py changepassword admin` to change the organizer password, and `python manage.py rotate_team_token Team-01` to rotate a team's token. `audit_credentials` is available as a manual check and does not block the test deployment.
-
-## Local run (PowerShell)
-
-From this repository's directory:
+From the repository directory, with your Python environment activated:
 
 ```powershell
 $env:DEBUG = 'True'
@@ -63,23 +77,19 @@ python manage.py seed_teams
 python manage.py runserver
 ```
 
-Run `python manage.py createsuperuser` if you do not already have an organizer account, then open http://127.0.0.1:8000/login/. If using the shared workspace virtual environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`. Set SQLITE_PATH only if you want to use a different SQLite file.
+Open http://127.0.0.1:8000/login/ and use a privately assigned login. Configure DASHBOARD_PASSWORDS_JSON locally first if provisioning new accounts. With the shared workspace environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`.
 
-## Request protection
+## Data protection and tariffs
 
-Dashboard pages require an assigned authenticated role. All data APIs require a valid team token or dashboard session. Team-authenticated requests, including CSV exports and free-text notes, remain scoped to their own telemetry. Jury sessions can read all teams, while organizer sessions can additionally manage accounts and perform administrative actions. Team submissions require a team token, and tariff publishing and Django administration require organizer staff access; session mutations require CSRF. Login attempts, API traffic, tariff downloads, telemetry, and exports have separate limits and return Retry-After on HTTP 429. JSON bodies are capped at 64 KB; teams can submit at most 12 appliances per phase. Telemetry replaces an existing 15-minute appliance slot instead of accumulating duplicates. Testing retains at most 20 records per team.
+Pages require a dashboard login, and APIs require a dashboard session or team token. Role and team identity come from the server. Changing a URL, query parameter, or token in a team dashboard session cannot expose another team's data. Team exports include only the assigned team; jury/organizer exports can include all teams. CSV text values are escaped against spreadsheet formula injection. Login, requests, downloads, and submissions are rate limited. JSON bodies are capped at 64 KB. Teams have at most 12 appliance names per phase, with one saved reading per appliance/phase/15-minute slot; testing retains 20 rows per team. Analytics queries cover at most 31 days, and exports stream in chunks.
 
-The single-worker test configuration shares limits across threads, but does not provide distributed or restart-persistent throttling. Analytics cover at most 31 days and exports stream in chunks. Invalid, nonfinite, negative, or incorrectly timestamped readings are rejected. Production-mode HTTPS, secure cookies, host checks, and CSRF remain enabled. This competition API uses OpenADR terminology; it does not implement the complete OpenADR 3 certification specification.
-
-## Tariffs
-
-The 48-hour graph and tariff downloads remain available. To publish a schedule from a service shell or a future scheduled job:
+The 48-hour tariff graph and downloads remain visible after login. There are no dashboard publishing controls. Publish using a trusted service shell or future scheduled job:
 
 ```sh
 python manage.py publish_tariffs --min-price 8 --max-price 20
 ```
 
-`publish_dynamic_tariffs.py` calls the same command. No continuously running scheduler is installed by this update. Currently the first tariff request after midnight IST rolls the schedule forward and preserves previously announced tomorrow prices. Manually publishing replaces all 48 prices, including prices teams may have cached.
+`publish_dynamic_tariffs.py` calls the same command. This update does not install a scheduler. The first tariff request after midnight IST rolls prices forward, preserving already announced tomorrow prices; manual publishing replaces all 48 prices.
 
 ## Verification
 
@@ -89,4 +99,4 @@ python manage.py test vtn_hub
 python manage.py makemigrations --check --dry-run
 ```
 
-Tests use an isolated database. Migration 0006 removes duplicate legacy slots, keeping the most recently saved record, before adding the uniqueness constraint. Existing team tokens and organizer passwords are preserved. Browser visual checks require an available browser connection.
+Tests use an isolated database and cover scoped reads, readonly jury/team sessions, private owner-assigned credentials, and removal of all credential-management web routes. Migration 0009 removes the obsolete forced-password-change flag. The existing team identifiers, device tokens, and telemetry are preserved. Browser visual testing needs an available browser connection.

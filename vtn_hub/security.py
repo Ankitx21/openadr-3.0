@@ -73,15 +73,6 @@ class RequestGuardMiddleware:
                     return blocked
             except Exception:
                 return error("Request protection is temporarily unavailable. Try again shortly.", 503, 30)
-        # Prevent temporary-password accounts from bypassing the first-login flow via Django admin.
-        if request.path.startswith('/admin/') and request.user.is_authenticated:
-            from .access import request_access
-            from django.shortcuts import redirect
-            role, team, account = request_access(request)
-            if role in ('team', 'jury'):
-                return error('Organizer access required.', 403)
-            if account and account.must_change_password:
-                return redirect('password_change')
         response = self.get_response(request)
         if guarded or request.path in ("/", "/analytics/"):
             response["Cache-Control"] = "no-store, private"

@@ -1,6 +1,6 @@
 # Student connection guide
 
-Use the Python client or HTTP API with the token assigned privately by your organizer. For browser access, ask the organizer for your team dashboard username and temporary password. You will set a separate dashboard password at first login and can then view only your own team analytics and exports. You do not need dashboard or organizer credentials for device API calls; use the existing API token without a dashboard-session cookie.
+Use the Python client or HTTP API with the token assigned privately by your organizer. For browser access, use the team login ID and password assigned by the competition owner. There is no password-change or reset option in the dashboard. Your account can view only your own team analytics and exports. You do not need dashboard or organizer credentials for device API calls; use the existing API token without a dashboard-session cookie.
 
 ## Python client
 

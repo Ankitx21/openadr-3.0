@@ -140,23 +140,24 @@ class HubTests(TestCase):
             self.assertEqual(self.client.get(path).status_code, 401)
         self.assertEqual(self.client.post('/api/v3/testing', '{"energy":1}', content_type='application/json').status_code, 401)
         self.assertEqual(self.client.post('/api/v3/tariffs/publish', '{}', content_type='application/json').status_code, 403)
-        self.assertEqual(self.client.get('/admin/').status_code, 302)
+        self.assertEqual(self.client.get('/admin/').status_code, 404)
 
     def test_publish_requires_csrf(self):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.admin)
         response = client.post('/api/v3/tariffs/publish', '{}', content_type='application/json')
         self.assertEqual(response.status_code, 403)
-        client.get('/admin/')
+        client.get('/')
         token = client.cookies['csrftoken'].value
         response = client.post('/api/v3/tariffs/publish', '{"min_price":8,"max_price":12}', content_type='application/json', HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 201)
         self.assertEqual(TariffInterval.objects.count(), 48)
 
-    def test_seed_never_resets_credentials(self):
+    @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
+    def test_seed_preserves_credentials_without_private_configuration(self):
         self.admin.set_password('preserved-password')
         self.admin.save()
-        with patch.dict('os.environ', {'DJANGO_SUPERUSER_USERNAME': 'organizer', 'DJANGO_SUPERUSER_PASSWORD': 'new-password'}):
+        with patch.dict('os.environ', {'DASHBOARD_PASSWORDS_JSON': ''}):
             call_command('seed_teams', stdout=StringIO())
         self.admin.refresh_from_db()
         self.team.refresh_from_db()
@@ -314,7 +315,7 @@ class LegacyMigrationTests(TransactionTestCase):
     def test_existing_duplicate_slots_keep_latest_saved_reading(self):
         from django.db import connection
         previous = ('vtn_hub', '0005_team_last_tariff_fetched_at_telemetryrecord_phase_and_more')
-        current = ('vtn_hub', '0008_dashboardaccount')
+        current = ('vtn_hub', '0009_remove_dashboardaccount_must_change_password')
         executor = MigrationExecutor(connection)
         executor.migrate([previous])
         try:
@@ -368,8 +369,8 @@ class DashboardRoleTests(TestCase):
         cls.jury = get_user_model().objects.create_user('jury', password='Initial!TestPassword72')
         cls.student = get_user_model().objects.create_user('team01', password='Initial!TestPassword72')
         cls.unassigned = get_user_model().objects.create_user('unassigned', password='Initial!TestPassword72')
-        DashboardAccount.objects.create(user=cls.jury, role='jury', must_change_password=False)
-        DashboardAccount.objects.create(user=cls.student, role='team', team=cls.team1, must_change_password=False)
+        DashboardAccount.objects.create(user=cls.jury, role='jury')
+        DashboardAccount.objects.create(user=cls.student, role='team', team=cls.team1)
         for team, app in [(cls.team1, 'Own_AC'), (cls.team2, 'Other_AC')]:
             for phase in ['testing', 'baseline', 'prototype']:
                 TelemetryRecord.objects.create(team=team, phase=phase, appliance=app, energy=0.25,
@@ -430,9 +431,9 @@ class DashboardRoleTests(TestCase):
                 response = self.client.post('/api/v3/'+phase, '{"energy":1}', content_type='application/json', HTTP_AUTHORIZATION='Bearer '+self.team1.token)
                 self.assertEqual(response.status_code, 403)
             self.assertEqual(self.client.post('/api/v3/tariffs/publish', '{}', content_type='application/json').status_code, 403)
-            self.assertEqual(self.client.get('/accounts/').status_code, 403)
-            self.assertEqual(self.client.post('/accounts/', {'action':'create','username':'elevated','role':'organizer'}).status_code, 403)
-            self.assertEqual(self.client.get('/admin/').status_code, 403)
+            self.assertEqual(self.client.get('/accounts/').status_code, 404)
+            self.assertEqual(self.client.post('/accounts/', {'action':'create','username':'elevated','role':'organizer'}).status_code, 404)
+            self.assertEqual(self.client.get('/admin/').status_code, 404)
         self.assertEqual(TelemetryRecord.objects.count(), count)
 
     def test_jury_can_review_all_teams_and_export_without_edit_controls(self):
@@ -460,83 +461,15 @@ class DashboardRoleTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn('_auth_user_id', self.client.session)
 
-    def test_first_login_requires_password_change_and_api_key_is_independent(self):
-        from .models import DashboardAccount
-        account = DashboardAccount.objects.get(user=self.student)
-        account.must_change_password = True
-        account.save()
-        response = self.client.post('/login/', {'username':'team01','password':'Initial!TestPassword72'})
-        self.assertEqual(response.url, '/password/change/')
-        self.assertEqual(self.client.get('/analytics/').url, '/password/change/')
-        self.assertEqual(self.client.get('/api/v3/testing').status_code, 403)
-        response = self.client.post('/password/change/', {'old_password':'Initial!TestPassword72',
-            'new_password1':'Changed!UniquePassword983','new_password2':'Changed!UniquePassword983'})
-        self.assertEqual(response.url, '/analytics/')
-        account.refresh_from_db()
-        self.assertFalse(account.must_change_password)
-        self.team1.refresh_from_db()
-        self.assertEqual(self.team1.token, 'device-token-one')
-        self.assertEqual(self.client.get('/analytics/').status_code, 200)
-        # A device is not tied to dashboard password/session state.
-        self.assertEqual(Client().get('/api/v3/auth/verify', HTTP_AUTHORIZATION='Bearer '+self.team1.token).status_code, 200)
 
-    def test_organizer_can_create_team_and_jury_accounts(self):
-        from .models import DashboardAccount
-        self.client.force_login(self.staff)
-        team = Team.objects.create(team_name='Team-03', token='untouched-token')
-        payload = {'username':'team03','role':'team','team':team.pk,
-                   'password1':'Temporary!UniquePassword837','password2':'Temporary!UniquePassword837'}
-        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
-        user = get_user_model().objects.get(username='team03')
-        self.assertFalse(user.is_staff)
-        self.assertFalse(user.is_superuser)
-        self.assertTrue(user.check_password(payload['password1']))
-        account = DashboardAccount.objects.get(user=user)
-        self.assertEqual(account.team, team)
-        self.assertTrue(account.must_change_password)
-        payload.update(username='jury02', role='jury', team='')
-        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
-        self.assertFalse(get_user_model().objects.get(username='jury02').is_staff)
-        team.refresh_from_db()
-        self.assertEqual(team.token, 'untouched-token')
 
-    def test_account_validation_duplicate_team_and_token_password(self):
-        from .forms import DashboardAccountForm
-        self.assertEqual(DashboardAccountForm().fields['role'].initial, 'team')
-        self.assertNotIn(self.team1, DashboardAccountForm().fields['team'].queryset)
-        self.client.force_login(self.staff)
-        payload = {'username':'duplicate','role':'team','team':self.team1.pk,
-                   'password1':'Temporary!UniquePassword837','password2':'Temporary!UniquePassword837'}
-        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
-        self.assertFalse(get_user_model().objects.filter(username='duplicate').exists())
-        payload.update(username='invalidjury', role='jury')
-        self.client.post('/accounts/', payload)
-        self.assertFalse(get_user_model().objects.filter(username='invalidjury').exists())
-        team = Team.objects.create(team_name='Team-03', token='Separate!StrongDeviceToken8827')
-        payload.update(username='samekey', role='team', team=team.pk, password1=team.token, password2=team.token)
-        self.client.post('/accounts/', payload)
-        self.assertFalse(get_user_model().objects.filter(username='samekey').exists())
 
-    def test_reset_revokes_sessions_and_disable_does_not_revoke_api(self):
-        from .models import DashboardAccount
-        student_client = Client()
-        student_client.force_login(self.student)
-        self.client.force_login(self.staff)
-        account = DashboardAccount.objects.get(user=self.student)
-        self.client.post('/accounts/', {'action':'reset', 'account_id':account.pk, 'temporary_password':'Reset!StrongPassword8273'})
-        self.assertEqual(student_client.get('/analytics/').status_code, 302)
-        self.student.refresh_from_db()
-        self.assertTrue(self.student.check_password('Reset!StrongPassword8273'))
-        self.client.post('/accounts/', {'action':'toggle', 'account_id':account.pk})
-        self.student.refresh_from_db()
-        self.assertFalse(self.student.is_active)
-        self.assertEqual(Client().get('/api/v3/auth/verify', HTTP_AUTHORIZATION='Bearer '+self.team1.token).status_code, 200)
 
     def test_csrf_required_for_login_and_account_management(self):
         client = Client(enforce_csrf_checks=True)
         self.assertEqual(client.post('/login/', {'username':'team01','password':'Initial!TestPassword72'}).status_code, 403)
         client.force_login(self.staff)
-        self.assertEqual(client.post('/accounts/', {'action':'create'}).status_code, 403)
+        self.assertEqual(client.post('/accounts/', {'action':'create'}).status_code, 404)
         self.assertEqual(client.post('/logout/').status_code, 403)
 
     def test_model_rejects_staff_team_and_missing_team_roles(self):
@@ -551,23 +484,68 @@ class DashboardRoleTests(TestCase):
 @override_settings(ALLOWED_HOSTS=['testserver'], SECURE_SSL_REDIRECT=False,
                    PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'],
                    CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
-class NewOrganizerTests(TestCase):
-    def test_created_organizer_gets_management_access_after_password_change(self):
+class OwnerManagedLoginTests(TestCase):
+    def setUp(self):
         cache.clear()
-        original = get_user_model().objects.create_user('original', password='Initial!Password923', is_staff=True)
-        self.client.force_login(original)
-        self.client.post('/accounts/', {'username':'neworganizer', 'role':'organizer', 'team':'',
-                                       'password1':'Temporary!ManagerPassword923','password2':'Temporary!ManagerPassword923'})
-        user = get_user_model().objects.get(username='neworganizer')
-        self.assertTrue(user.is_staff)
-        self.assertFalse(user.is_superuser)
-        self.assertTrue(user.has_perm('vtn_hub.change_team'))
+        import os
+        # Synthetic test fixtures, not the owner's actual deployment credentials.
+        self.fixture_passwords = {'admin':'Fixture!AdminPassword927', 'organizer':'Fixture!AdminPassword927',
+                                  'jury':'Fixture!AdminPassword927', 'team01':'Fixture!TeamOnePassword927',
+                                  'team02':'Fixture!TeamTwoPassword927'}
+        environment = patch.dict(os.environ, {'DASHBOARD_PASSWORDS_JSON': json.dumps(self.fixture_passwords)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        call_command('seed_teams', count=2, stdout=StringIO())
+
+    def test_owner_assigned_credentials_login_without_password_change(self):
+        cases = [(name, password, '/analytics/' if name.startswith('team') else '/') for name, password in self.fixture_passwords.items()]
+        for username, password, target in cases:
+            client = Client()
+            response = client.post('/login/', {'username':username, 'password':password})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.url, target)
+            page = client.get(target)
+            self.assertEqual(page.status_code, 200)
+            for forbidden in ['/accounts/', '/password/', '/admin/', 'Change password', 'Dashboard accounts']:
+                self.assertNotContains(page, forbidden)
+        page = Client().get('/login/')
+        for password in self.fixture_passwords.values():
+            self.assertNotContains(page, password)
+
+    def test_no_web_credential_routes_for_any_role(self):
+        for username in ['admin','organizer','jury','team01']:
+            client = Client()
+            client.force_login(get_user_model().objects.get(username=username))
+            for path in ['/accounts/', '/password/change/', '/password/reset/', '/admin/', '/admin/auth/user/']:
+                self.assertEqual(client.get(path).status_code, 404)
+                self.assertEqual(client.post(path, {'action':'reset','temporary_password':'attacker-password'}).status_code, 404)
+
+    def test_only_server_environment_can_override_assigned_passwords(self):
+        import os
+        team = Team.objects.get(team_name='Team-01')
+        token = team.token
+        with patch.dict(os.environ, {'DASHBOARD_PASSWORDS_JSON': json.dumps({'team01':'OwnerOnly!Password938'})}):
+            call_command('seed_dashboard_logins', count=2, stdout=StringIO())
+        user = get_user_model().objects.get(username='team01')
+        self.assertTrue(user.check_password('OwnerOnly!Password938'))
+        self.assertFalse(user.check_password(self.fixture_passwords['team01']))
+        team.refresh_from_db()
+        self.assertEqual(team.token, token)
         client = Client()
-        response = client.post('/login/', {'username':user.username, 'password':'Temporary!ManagerPassword923'})
-        self.assertEqual(response.url, '/password/change/')
-        self.assertEqual(client.get('/admin/').url, '/password/change/')
-        response = client.post('/password/change/', {'old_password':'Temporary!ManagerPassword923',
-                              'new_password1':'Changed!ManagerPassword782','new_password2':'Changed!ManagerPassword782'})
-        self.assertEqual(response.url, '/')
-        self.assertEqual(client.get('/accounts/').status_code, 200)
-        self.assertEqual(client.get('/admin/vtn_hub/team/').status_code, 200)
+        response = client.post('/login/', {'username':'team01','password':'OwnerOnly!Password938', 'password1':'InjectedPassword823'})
+        self.assertEqual(response.url, '/analytics/')
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('OwnerOnly!Password938'))
+
+    def test_seed_replaces_previous_team_alias_without_changing_data(self):
+        from .models import DashboardAccount
+        team = Team.objects.get(team_name='Team-01')
+        DashboardAccount.objects.filter(team=team).delete()
+        old = get_user_model().objects.create_user('old-team-login', password='Old!Password936')
+        DashboardAccount.objects.create(user=old, role='team', team=team)
+        TelemetryRecord.objects.create(team=team, appliance='AC', energy=0.25, timestamp=timezone.now())
+        call_command('seed_dashboard_logins', count=2, stdout=StringIO())
+        self.assertEqual(DashboardAccount.objects.get(team=team).user.username, 'team01')
+        old.refresh_from_db()
+        self.assertFalse(old.is_active)
+        self.assertEqual(TelemetryRecord.objects.filter(team=team).count(), 1)

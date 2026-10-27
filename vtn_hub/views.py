@@ -11,12 +11,9 @@ from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.http import JsonResponse, HttpResponse, StreamingHttpResponse
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth import login, logout, update_session_auth_hash, get_user_model
-from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.shortcuts import render, redirect
+from django.contrib.auth import login, logout
+from django.contrib.auth.forms import AuthenticationForm
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -25,9 +22,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .models import Team, TelemetryRecord, snap_to_15min_interval
 from .tariffs import IST, get_or_create_published_tariffs, generate_dynamic_tariffs, save_published_tariffs
 from .security import error, throttle
-from .access import request_access, access_for, save_dashboard_account
-from .forms import DashboardAccountForm
-from .models import DashboardAccount
+from .access import request_access, access_for
 
 PHASES = ('testing', 'baseline', 'prototype')
 MAX_APPLIANCES = 12
@@ -58,8 +53,6 @@ def api_access(organizer_only=False):
         def wrapped(request, *args, **kwargs):
             request.team = None
             role, linked_team, account = request_access(request)
-            if account and account.must_change_password:
-                return error('Change your temporary dashboard password before continuing.', 403)
             if role in ('team', 'jury') and request.method not in ('GET', 'HEAD'):
                 return error('Dashboard accounts have read-only API access. Devices must use a team API token without a dashboard session.', 403)
             if organizer_only:
@@ -96,8 +89,6 @@ def portal(view):
         role, team, account = request_access(request)
         if not role:
             return HttpResponse('No dashboard role assigned. Contact the organizer.', status=403)
-        if account and account.must_change_password:
-            return redirect('password_change')
         blocked = throttle(request.user.pk, 'portal', [(30, 60)])
         if blocked is not None:
             return blocked
@@ -108,15 +99,14 @@ def portal(view):
 def login_view(request):
     role, team, account = request_access(request)
     if role:
-        return redirect('password_change' if account and account.must_change_password else ('analytics' if role == 'team' else 'dashboard'))
+        return redirect('analytics' if role == 'team' else 'dashboard')
     form = AuthenticationForm(request, data=request.POST if request.method == 'POST' else None)
+    form.fields['username'].widget.attrs['placeholder'] = 'team01 / organizer / jury'
     if request.method == 'POST' and form.is_valid():
         user = form.get_user()
         role, team, account = access_for(user)
         if role:
             login(request, user)
-            if account and account.must_change_password:
-                return redirect('password_change')
             next_url = request.POST.get('next') or '/'
             if role == 'team':
                 next_url = '/analytics/'
@@ -133,83 +123,6 @@ def logout_view(request):
     return redirect('login')
 
 
-def password_change_view(request):
-    if not request.user.is_authenticated:
-        return redirect('login')
-    role, team, account = request_access(request)
-    if not role:
-        return HttpResponse('No dashboard role assigned.', status=403)
-    if request.method == 'POST':
-        blocked = throttle(request.user.pk, 'password-change', [(10, 300)])
-        if blocked is not None:
-            return blocked
-    form = PasswordChangeForm(request.user, request.POST if request.method == 'POST' else None)
-    if request.method == 'POST' and form.is_valid():
-        if team and form.cleaned_data['new_password1'] == team.token:
-            form.add_error('new_password1', 'Use a password different from your API token.')
-        else:
-            user = form.save()
-            if account:
-                account.must_change_password = False
-                account.save(update_fields=['must_change_password'])
-            update_session_auth_hash(request, user)
-            return redirect('analytics' if role == 'team' else 'dashboard')
-    return render(request, 'vtn_app/password_change.html', {'form': form, 'required_change': bool(account and account.must_change_password)})
-
-
-@portal
-def accounts_view(request):
-    if request_access(request)[0] != 'organizer':
-        return HttpResponse('Organizer access required.', status=403)
-    form = DashboardAccountForm()
-    problem = None
-    notice = None
-    if request.method == 'POST':
-        action = request.POST.get('action', 'create')
-        if action == 'create':
-            form = DashboardAccountForm(request.POST)
-            if form.is_valid():
-                try:
-                    with transaction.atomic():
-                        user = form.save(commit=False)
-                        save_dashboard_account(user, form.cleaned_data['role'], form.cleaned_data.get('team'))
-                    notice = 'Account created. Share its temporary password privately; a password change is required at first sign-in.'
-                    form = DashboardAccountForm()
-                except (ValidationError, IntegrityError, ValueError):
-                    form.add_error(None, 'Could not create account. Check that the username and team are not already assigned.')
-        elif action in ('reset', 'toggle'):
-            try:
-                account_id = int(request.POST.get('account_id', ''))
-            except (ValueError, TypeError):
-                return HttpResponse('Invalid account.', status=400)
-            account = get_object_or_404(DashboardAccount.objects.select_related('user', 'team'), pk=account_id)
-            user = account.user
-            if user.pk == request.user.pk or user.is_superuser:
-                problem = 'Use Change password for your own account. Superuser access cannot be changed here.'
-            elif action == 'toggle':
-                user.is_active = not user.is_active
-                user.save(update_fields=['is_active'])
-                notice = 'Account access updated. Team API credentials are unchanged.'
-            else:
-                password = request.POST.get('temporary_password', '')
-                try:
-                    validate_password(password, user)
-                    if account.team and password == account.team.token:
-                        raise ValidationError('Use a password different from the API token.')
-                    with transaction.atomic():
-                        user.set_password(password)
-                        user.save(update_fields=['password'])
-                        account.must_change_password = True
-                        account.save(update_fields=['must_change_password'])
-                    notice = 'Temporary password updated. Existing sessions are invalidated.'
-                except ValidationError as exc:
-                    problem = ' '.join(exc.messages)
-        else:
-            return HttpResponse('Invalid action.', status=400)
-    accounts = DashboardAccount.objects.select_related('user', 'team').order_by('user__username')
-    return render(request, 'vtn_app/accounts.html', {'form': form, 'accounts': accounts, 'problem': problem, 'notice': notice})
-
-
 def touch_team(team, tariff=False):
     now = timezone.now()
     try:
@@ -219,7 +132,7 @@ def touch_team(team, tariff=False):
         if tariff and cache.add(f'tariff-touch:{team.pk}', True, 60):
             Team.objects.filter(pk=team.pk).update(last_tariff_fetched_at=now)
     except Exception:
-        pass  # Receipt tracking must not turn an already committed report into a failure.
+        pass  # Receipt tracking must not turn a committed report into a failure.
 
 
 @require_GET
