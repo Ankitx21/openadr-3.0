@@ -29,17 +29,15 @@ class HubTests(TestCase):
     def post(self, body, path='/api/v3/baseline', **headers):
         return self.client.post(path, json.dumps(body), content_type='application/json', **(headers or self.headers))
 
-    def test_portal_requires_staff(self):
-        self.assertEqual(self.client.get('/').status_code, 302)
-        user = get_user_model().objects.create_user('student')
-        self.client.force_login(user)
-        self.assertEqual(self.client.get('/').status_code, 403)
-        self.client.force_login(self.admin)
+    def test_portal_is_public_without_login_controls(self):
+        self.assertEqual(self.client.get('/').status_code, 200)
         for path in ['/', '/analytics/']:
             self.assertEqual(self.client.get(path).status_code, 200)
         dashboard = self.client.get('/')
         self.assertContains(dashboard, 'OpenADR 3.0')
         self.assertContains(dashboard, 'tariff-chart')
+        for hidden in ['/login/', '/logout/', '/admin/', self.team.token, self.other.token]:
+            self.assertNotContains(dashboard, hidden)
         for removed in ['Gridroom', 'gridroom', '/student/', 'publishForm', 'Publish a new tariff']:
             self.assertNotContains(dashboard, removed)
         self.assertEqual(self.client.get('/student/').status_code, 404)
@@ -49,10 +47,10 @@ class HubTests(TestCase):
 
 
     def test_anonymous_data_access_blocked(self):
-        for path in ['/api/v3/baseline', '/api/v3/testing', '/api/v3/prototype', '/api/v3/telemetry/intervals', '/download/telemetry.csv', '/download/tariffs.csv']:
+        for path in ['/api/v3/baseline', '/api/v3/testing', '/api/v3/prototype', '/api/v3/auth/verify', '/api/v3/tariffs']:
             self.assertIn(self.client.get(path).status_code, [401, 403])
 
-    def test_team_cannot_export_or_publish(self):
+    def test_team_cannot_publish_or_read_private_standings(self):
         self.assertEqual(self.client.get('/download/telemetry.csv', **self.headers).status_code, 403)
         self.assertEqual(self.post({}, '/api/v3/tariffs/publish').status_code, 403)
         self.assertEqual(self.client.get('/api/v3/leaderboard', **self.headers).status_code, 403)
@@ -124,25 +122,36 @@ class HubTests(TestCase):
         for value in ['-1', 'oops', '100000']:
             self.assertEqual(self.client.get('/api/v3/baseline?limit=' + value, **self.headers).status_code, 400)
 
-    def test_login_throttle_and_open_redirect(self):
+    def test_admin_login_throttle_and_legacy_login_redirect(self):
         for _ in range(10):
-            self.assertEqual(self.client.post('/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 200)
-        self.assertEqual(self.client.post('/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 429)
+            self.assertEqual(self.client.post('/admin/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 200)
+        self.assertEqual(self.client.post('/admin/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 429)
         cache.clear()
-        self.client.force_login(self.admin)
         self.assertEqual(self.client.get('/login/?next=//evil.example').url, '/')
 
-    def test_logout_is_post_only(self):
-        self.client.force_login(self.admin)
-        self.assertEqual(self.client.get('/logout/').status_code, 405)
-        self.assertEqual(self.client.post('/logout/').status_code, 302)
+    def test_legacy_logout_returns_to_public_homepage(self):
+        self.assertRedirects(self.client.get('/logout/'), '/')
+
+    def test_public_charts_keep_exports_and_writes_protected(self):
+        TelemetryRecord.objects.create(team=self.other, appliance='Public_AC', energy=1,
+                                       notes='Private organizer note', timestamp=timezone.now())
+        response = self.client.get('/api/v3/telemetry/intervals?team=Team-02')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['team_name'], 'Team-02')
+        self.assertEqual(self.client.get('/download/tariffs.csv').status_code, 200)
+        self.assertEqual(self.client.get('/download/telemetry.csv').status_code, 403)
+        self.assertNotContains(self.client.get('/'), '/download/telemetry.csv')
+        self.assertNotContains(self.client.get('/analytics/'), 'id="exportTeam"')
+        self.assertEqual(self.client.post('/api/v3/testing', '{"energy":1}', content_type='application/json').status_code, 401)
+        self.assertEqual(self.client.post('/api/v3/tariffs/publish', '{}', content_type='application/json').status_code, 403)
+        self.assertEqual(self.client.get('/admin/').status_code, 302)
 
     def test_publish_requires_csrf(self):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.admin)
         response = client.post('/api/v3/tariffs/publish', '{}', content_type='application/json')
         self.assertEqual(response.status_code, 403)
-        client.get('/')
+        client.get('/admin/')
         token = client.cookies['csrftoken'].value
         response = client.post('/api/v3/tariffs/publish', '{"min_price":8,"max_price":12}', content_type='application/json', HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 201)

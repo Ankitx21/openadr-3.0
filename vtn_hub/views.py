@@ -7,15 +7,12 @@ from datetime import datetime, timedelta
 from functools import wraps
 from io import StringIO
 
-from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.http import JsonResponse, HttpResponse, StreamingHttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import render
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -46,7 +43,7 @@ def organizer(user):
     return user.is_authenticated and user.is_staff and user.is_active
 
 
-def api_access(organizer_only=False):
+def api_access(organizer_only=False, public_read=False):
     def decorator(view):
         @wraps(view)
         def wrapped(request, *args, **kwargs):
@@ -54,6 +51,8 @@ def api_access(organizer_only=False):
             try:
                 if organizer(request.user) and (organizer_only or not extract_token(request)):
                     identity = f'user:{request.user.pk}'
+                elif public_read and request.method == 'GET' and not extract_token(request):
+                    identity = 'public:' + request.META.get('REMOTE_ADDR', 'unknown')
                 elif organizer_only:
                     return error('Organizer access required.', 403)
                 else:
@@ -73,12 +72,11 @@ def api_access(organizer_only=False):
 
 
 def portal(view):
-    @login_required
+    @require_GET
     @wraps(view)
     def wrapped(request, *args, **kwargs):
-        if not organizer(request.user):
-            return HttpResponse('Organizer access required.', status=403)
-        blocked = throttle(request.user.pk, 'portal', [(30, 60)])
+        identity = request.META.get('REMOTE_ADDR', 'unknown')
+        blocked = throttle(identity, 'portal', [(30, 60)])
         if blocked is not None:
             return blocked
         return view(request, *args, **kwargs)
@@ -95,28 +93,6 @@ def touch_team(team, tariff=False):
             Team.objects.filter(pk=team.pk).update(last_tariff_fetched_at=now)
     except Exception:
         pass  # Receipt tracking must not turn an already committed report into a failure.
-
-
-def login_view(request):
-    next_url = request.POST.get('next') or request.GET.get('next') or '/'
-    if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
-        next_url = '/'
-    if organizer(request.user):
-        return redirect(next_url)
-    problem = None
-    if request.method == 'POST':
-        user = authenticate(request, username=request.POST.get('username', '').strip(), password=request.POST.get('password', ''))
-        if user is not None and organizer(user):
-            login(request, user)
-            return redirect(next_url)
-        problem = 'Unable to sign in. Check your organizer credentials.'
-    return render(request, 'vtn_app/login.html', {'error': problem, 'next': next_url})
-
-
-@require_POST
-def logout_view(request):
-    logout(request)
-    return redirect('/login/')
 
 
 @portal
@@ -386,7 +362,7 @@ def api_leaderboard(request):
 
 
 @require_GET
-@api_access()
+@api_access(public_read=True)
 def api_telemetry_intervals(request):
     phase = request.GET.get('phase', 'baseline')
     period = request.GET.get('range', '24h')
@@ -436,7 +412,7 @@ def api_telemetry_intervals(request):
 
 
 @require_GET
-@api_access()
+@api_access(public_read=True)
 def download_tariffs_csv(request):
     tariffs, _ = get_or_create_published_tariffs()
     out = StringIO()
@@ -452,7 +428,8 @@ def download_tariffs_csv(request):
 @require_GET
 @api_access(organizer_only=True)
 def download_telemetry_csv(request):
-    blocked = throttle(request.user.pk, 'export', [(2, 60)])
+    identity = 'team:' + str(request.team.pk) if request.team else request.META.get('REMOTE_ADDR', 'unknown')
+    blocked = throttle(identity, 'export', [(2, 60)])
     if blocked is not None:
         return blocked
     phase = request.GET.get('phase', '')
@@ -463,6 +440,8 @@ def download_telemetry_csv(request):
         qs = qs.filter(phase=phase)
     if request.GET.get('team'):
         qs = qs.filter(team__team_name=request.GET['team'])
+    if request.team:
+        qs = qs.filter(team=request.team)
     # Stream in bounded chunks instead of loading an entire competition into memory.
     class Echo:
         def write(self, value):
@@ -475,7 +454,7 @@ def download_telemetry_csv(request):
         for r in qs.iterator(chunk_size=500):
             yield writer.writerow([safe(v) for v in [r.pk, r.phase, r.timestamp.astimezone(IST).isoformat(),
                 r.interval_timestamp.astimezone(IST).isoformat() if r.interval_timestamp else '', r.team.team_name,
-                r.appliance, r.outdoor_temperature, r.energy, r.notes]])
+                r.appliance, r.outdoor_temperature, r.energy, r.notes if organizer(request.user) else '']])
     response = StreamingHttpResponse(rows(), content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="competition_telemetry.csv"'
     return response

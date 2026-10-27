@@ -71,7 +71,7 @@ if ($('teamSelect')) {
       const tbody=$('telemetryTableBody'); tbody.replaceChildren();
       if (!data.table_rows.length) {const td=make('td','No readings match these filters.',make('tr',undefined,tbody)); td.colSpan=5; td.className='empty';}
       data.table_rows.forEach(row=> { const tr=make('tr',undefined,tbody); [row.interval_ist, row.appliance, row.energy.toFixed(3), row.outdoor_temperature===null?'—':row.outdoor_temperature+' °C', row.recorded_at].forEach(value=>make('td',value,tr)); });
-      $('exportTeam').href='/download/telemetry.csv?'+new URLSearchParams({team:params.get('team'),phase:params.get('phase')});
+      if ($('exportTeam')) $('exportTeam').href='/download/telemetry.csv?'+new URLSearchParams({team:params.get('team'),phase:params.get('phase')});
       $('analyticsStatus').textContent=`Updated ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'})} IST · ${data.total_records} readings · Gaps represent missing data.`; $('analyticsStatus').className='status-line';
     } catch(error) { if (error.retry) cooldownUntil=Date.now()+error.retry*1000; $('analyticsStatus').textContent=error.message; $('analyticsStatus').className='status-line error'; }
     finally {busy=false; $('refreshAnalytics').disabled=false; if(pending){pending=false; load();}}

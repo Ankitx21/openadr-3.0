@@ -1,6 +1,6 @@
 # OpenADR 3.0
 
-Organizer and jury dashboard for verifying team progress. Routes: `/` for the overview, `/analytics/` for team telemetry, and `/admin/` for team management. Teams submit data using their assigned API tokens and the Python/device clients. There is no student web workspace or dashboard tariff publishing control.
+Public organizer and jury dashboard for verifying team progress. The homepage and analytics open without a password; anyone with the URL can view the dashboard and charts. Telemetry CSV exports remain restricted to organizer staff. Django admin and all API write operations remain protected. Routes: `/` for the overview, `/analytics/` for team telemetry, and `/admin/` for team management. Teams submit data using their assigned API tokens and the Python/device clients. There is no student web workspace or dashboard tariff publishing control.
 
 ## Existing Render test deployment
 
@@ -36,15 +36,14 @@ Remove-Item Env:REDIS_URL -ErrorAction SilentlyContinue
 python -m pip install -r requirements.txt
 python manage.py migrate
 python manage.py seed_teams
-python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/. If using the shared workspace virtual environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`. Set SQLITE_PATH only if you want to use a different SQLite file.
+Open http://127.0.0.1:8000/ directly; no dashboard account is required. Use `python manage.py createsuperuser` only if you need protected Django admin access. If using the shared workspace virtual environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`. Set SQLITE_PATH only if you want to use a different SQLite file.
 
 ## Request protection
 
-All data APIs require team credentials or an organizer session. Team tokens read only their own telemetry. Cross-team exports and publishing require organizer staff access; session mutations require CSRF. Login attempts, API traffic, tariff downloads, telemetry, and exports have separate limits and return Retry-After on HTTP 429. JSON bodies are capped at 64 KB; teams can submit at most 12 appliances per phase. Telemetry replaces an existing 15-minute appliance slot instead of accumulating duplicates. Testing retains at most 20 records per team.
+Dashboard chart data and tariff CSV downloads are public and rate limited. Telemetry CSV exports require organizer staff access. Free-text telemetry notes are included only in staff exports. Team-authenticated requests remain scoped to their own telemetry. Team submissions require a team token, and tariff publishing and Django administration require organizer staff access; session mutations require CSRF. Login attempts, API traffic, tariff downloads, telemetry, and exports have separate limits and return Retry-After on HTTP 429. JSON bodies are capped at 64 KB; teams can submit at most 12 appliances per phase. Telemetry replaces an existing 15-minute appliance slot instead of accumulating duplicates. Testing retains at most 20 records per team.
 
 The single-worker test configuration shares limits across threads, but does not provide distributed or restart-persistent throttling. Analytics cover at most 31 days and exports stream in chunks. Invalid, nonfinite, negative, or incorrectly timestamped readings are rejected. Production-mode HTTPS, secure cookies, host checks, and CSRF remain enabled. This competition API uses OpenADR terminology; it does not implement the complete OpenADR 3 certification specification.
 
