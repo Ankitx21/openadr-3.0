@@ -29,29 +29,27 @@ class HubTests(TestCase):
     def post(self, body, path='/api/v3/baseline', **headers):
         return self.client.post(path, json.dumps(body), content_type='application/json', **(headers or self.headers))
 
-    def test_portal_is_public_without_login_controls(self):
-        self.assertEqual(self.client.get('/').status_code, 200)
+    def test_organizer_portal_requires_login(self):
+        self.assertEqual(self.client.get('/').status_code, 302)
+        self.client.force_login(self.admin)
         for path in ['/', '/analytics/']:
             self.assertEqual(self.client.get(path).status_code, 200)
         dashboard = self.client.get('/')
         self.assertContains(dashboard, 'OpenADR 3.0')
         self.assertContains(dashboard, 'tariff-chart')
-        for hidden in ['/login/', '/logout/', '/admin/', self.team.token, self.other.token]:
-            self.assertNotContains(dashboard, hidden)
-        for removed in ['Gridroom', 'gridroom', '/student/', 'publishForm', 'Publish a new tariff']:
+        for removed in ['Gridroom', 'gridroom', '/student/', 'publishForm']:
             self.assertNotContains(dashboard, removed)
         self.assertEqual(self.client.get('/student/').status_code, 404)
         analytics = self.client.get('/analytics/').content.decode()
         self.assertLess(analytics.index('value="testing"'), analytics.index('value="baseline"'))
         self.assertLess(analytics.index('value="baseline"'), analytics.index('value="prototype"'))
 
-
     def test_anonymous_data_access_blocked(self):
-        for path in ['/api/v3/baseline', '/api/v3/testing', '/api/v3/prototype', '/api/v3/auth/verify', '/api/v3/tariffs']:
+        for path in ['/api/v3/baseline', '/api/v3/testing', '/api/v3/prototype', '/api/v3/auth/verify', '/api/v3/tariffs', '/api/v3/telemetry/intervals', '/download/telemetry.csv', '/download/tariffs.csv']:
             self.assertIn(self.client.get(path).status_code, [401, 403])
 
     def test_team_cannot_publish_or_read_private_standings(self):
-        self.assertEqual(self.client.get('/download/telemetry.csv', **self.headers).status_code, 403)
+        self.assertEqual(self.client.get('/download/telemetry.csv', **self.headers).status_code, 200)
         self.assertEqual(self.post({}, '/api/v3/tariffs/publish').status_code, 403)
         self.assertEqual(self.client.get('/api/v3/leaderboard', **self.headers).status_code, 403)
 
@@ -122,26 +120,24 @@ class HubTests(TestCase):
         for value in ['-1', 'oops', '100000']:
             self.assertEqual(self.client.get('/api/v3/baseline?limit=' + value, **self.headers).status_code, 400)
 
-    def test_admin_login_throttle_and_legacy_login_redirect(self):
+    def test_login_throttle_and_safe_redirect(self):
         for _ in range(10):
-            self.assertEqual(self.client.post('/admin/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 200)
-        self.assertEqual(self.client.post('/admin/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 429)
+            self.assertEqual(self.client.post('/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 200)
+        self.assertEqual(self.client.post('/login/', {'username': 'wrong', 'password': 'wrong'}).status_code, 429)
         cache.clear()
-        self.assertEqual(self.client.get('/login/?next=//evil.example').url, '/')
+        response = self.client.post('/login/', {'username': self.admin.username, 'password': 'a-complex-test-password', 'next': '//evil.example'})
+        self.assertEqual(response.url, '/')
 
-    def test_legacy_logout_returns_to_public_homepage(self):
-        self.assertRedirects(self.client.get('/logout/'), '/')
+    def test_logout_is_post_only(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get('/logout/').status_code, 405)
+        self.assertRedirects(self.client.post('/logout/'), '/login/')
 
-    def test_public_charts_keep_exports_and_writes_protected(self):
-        TelemetryRecord.objects.create(team=self.other, appliance='Public_AC', energy=1,
-                                       notes='Private organizer note', timestamp=timezone.now())
-        response = self.client.get('/api/v3/telemetry/intervals?team=Team-02')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['team_name'], 'Team-02')
-        self.assertEqual(self.client.get('/download/tariffs.csv').status_code, 200)
-        self.assertEqual(self.client.get('/download/telemetry.csv').status_code, 403)
-        self.assertNotContains(self.client.get('/'), '/download/telemetry.csv')
-        self.assertNotContains(self.client.get('/analytics/'), 'id="exportTeam"')
+    def test_dashboard_and_chart_data_are_no_longer_public(self):
+        self.assertEqual(self.client.get('/').status_code, 302)
+        self.assertEqual(self.client.get('/analytics/').status_code, 302)
+        for path in ['/api/v3/telemetry/intervals?team=Team-02', '/download/tariffs.csv', '/download/telemetry.csv']:
+            self.assertEqual(self.client.get(path).status_code, 401)
         self.assertEqual(self.client.post('/api/v3/testing', '{"energy":1}', content_type='application/json').status_code, 401)
         self.assertEqual(self.client.post('/api/v3/tariffs/publish', '{}', content_type='application/json').status_code, 403)
         self.assertEqual(self.client.get('/admin/').status_code, 302)
@@ -318,7 +314,7 @@ class LegacyMigrationTests(TransactionTestCase):
     def test_existing_duplicate_slots_keep_latest_saved_reading(self):
         from django.db import connection
         previous = ('vtn_hub', '0005_team_last_tariff_fetched_at_telemetryrecord_phase_and_more')
-        current = ('vtn_hub', '0007_alter_team_token')
+        current = ('vtn_hub', '0008_dashboardaccount')
         executor = MigrationExecutor(connection)
         executor.migrate([previous])
         try:
@@ -358,3 +354,220 @@ class RenderTestConfigTests(UnitTestCase):
             config['on_starting'](server)
         self.assertEqual(server.num_workers, 2)
         server.cfg.set.assert_not_called()
+
+@override_settings(ALLOWED_HOSTS=['testserver'], SECURE_SSL_REDIRECT=False,
+                   PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'],
+                   CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+class DashboardRoleTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        from .models import DashboardAccount
+        cls.team1 = Team.objects.create(team_name='Team-01', token='device-token-one')
+        cls.team2 = Team.objects.create(team_name='Team-02', token='device-token-two')
+        cls.staff = get_user_model().objects.create_user('organizer', password='Initial!TestPassword72', is_staff=True)
+        cls.jury = get_user_model().objects.create_user('jury', password='Initial!TestPassword72')
+        cls.student = get_user_model().objects.create_user('team01', password='Initial!TestPassword72')
+        cls.unassigned = get_user_model().objects.create_user('unassigned', password='Initial!TestPassword72')
+        DashboardAccount.objects.create(user=cls.jury, role='jury', must_change_password=False)
+        DashboardAccount.objects.create(user=cls.student, role='team', team=cls.team1, must_change_password=False)
+        for team, app in [(cls.team1, 'Own_AC'), (cls.team2, 'Other_AC')]:
+            for phase in ['testing', 'baseline', 'prototype']:
+                TelemetryRecord.objects.create(team=team, phase=phase, appliance=app, energy=0.25,
+                                               notes='Internal '+team.team_name, timestamp=timezone.now())
+
+    def setUp(self):
+        cache.clear()
+
+    def test_role_specific_login_destinations(self):
+        for username, destination in [('organizer', '/'), ('jury', '/'), ('team01', '/analytics/')]:
+            client = Client()
+            response = client.post('/login/', {'username': username, 'password': 'Initial!TestPassword72', 'next': '//evil.example'})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.url, destination)
+
+    def test_team_page_contains_only_own_team_and_fixed_selector(self):
+        self.client.force_login(self.student)
+        self.assertRedirects(self.client.get('/'), '/analytics/')
+        page = self.client.get('/analytics/')
+        self.assertContains(page, 'Team-01')
+        self.assertContains(page, 'type="hidden" value="Team-01"')
+        for forbidden in ['Team-02', '/accounts/', '/admin/', 'Other_AC', self.team1.token, self.team2.token]:
+            self.assertNotContains(page, forbidden)
+        self.assertEqual(self.client.get('/analytics/?team=Team-02').status_code, 403)
+
+    def test_team_reads_scoped_across_all_aliases(self):
+        self.client.force_login(self.student)
+        paths = ['/api/v3/testing', '/api/v3/testing-data', '/api/v3/testing/data',
+                 '/api/v3/baseline', '/api/v3/baseline-data', '/api/v3/baseline/data', '/api/v3/reports',
+                 '/api/v3/prototype', '/api/v3/prototype-data', '/api/v3/prototype/data', '/api/v3/sandbox/test']
+        for path in paths:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual({r['team_name'] for r in response.json()['data']}, {'Team-01'})
+            self.assertEqual(self.client.get(path+'?team=Team-02').status_code, 403)
+        self.assertEqual(self.client.get('/api/v3/appliances').json()['appliances'][0]['appliance'], 'Own_AC')
+        self.assertEqual(self.client.get('/api/v3/team/status').json()['team_name'], 'Team-01')
+
+    def test_team_cannot_change_chart_or_download_scope(self):
+        self.client.force_login(self.student)
+        for path in ['/api/v3/telemetry/intervals', '/api/v3/baseline/intervals', '/download/telemetry.csv', '/download/baseline-data.csv']:
+            self.assertEqual(self.client.get(path+'?team=Team-02').status_code, 403)
+        data = self.client.get('/api/v3/telemetry/intervals').json()
+        self.assertEqual(data['team_name'], 'Team-01')
+        self.assertNotIn('Other_AC', data['appliances'])
+        response = self.client.get('/download/telemetry.csv')
+        content = b''.join(response.streaming_content).decode()
+        self.assertIn('Own_AC', content)
+        self.assertNotIn('Other_AC', content)
+        self.assertNotIn(self.team1.token, content)
+        self.assertEqual(self.client.get('/api/v3/baseline', HTTP_AUTHORIZATION='Bearer '+self.team2.token).status_code, 403)
+
+    def test_team_and_jury_sessions_are_read_only(self):
+        count = TelemetryRecord.objects.count()
+        for user in [self.student, self.jury]:
+            self.client.force_login(user)
+            for phase in ['testing', 'baseline', 'prototype']:
+                response = self.client.post('/api/v3/'+phase, '{"energy":1}', content_type='application/json', HTTP_AUTHORIZATION='Bearer '+self.team1.token)
+                self.assertEqual(response.status_code, 403)
+            self.assertEqual(self.client.post('/api/v3/tariffs/publish', '{}', content_type='application/json').status_code, 403)
+            self.assertEqual(self.client.get('/accounts/').status_code, 403)
+            self.assertEqual(self.client.post('/accounts/', {'action':'create','username':'elevated','role':'organizer'}).status_code, 403)
+            self.assertEqual(self.client.get('/admin/').status_code, 403)
+        self.assertEqual(TelemetryRecord.objects.count(), count)
+
+    def test_jury_can_review_all_teams_and_export_without_edit_controls(self):
+        self.client.force_login(self.jury)
+        overview = self.client.get('/')
+        self.assertContains(overview, 'Team-01')
+        self.assertContains(overview, 'Team-02')
+        self.assertNotContains(overview, '/accounts/')
+        self.assertNotContains(overview, '/admin/')
+        self.assertEqual(self.client.get('/api/v3/telemetry/intervals?team=Team-02').json()['team_name'], 'Team-02')
+        response = self.client.get('/download/telemetry.csv')
+        content = b''.join(response.streaming_content).decode()
+        self.assertIn('Own_AC', content)
+        self.assertIn('Other_AC', content)
+
+    def test_anonymous_and_unassigned_users_cannot_read_any_dashboard_data(self):
+        for user in [None, self.unassigned]:
+            client = Client()
+            if user:
+                client.force_login(user)
+            for path in ['/api/v3/telemetry/intervals', '/download/telemetry.csv', '/download/tariffs.csv', '/api/v3/testing']:
+                self.assertEqual(client.get(path).status_code, 401)
+            self.assertIn(client.get('/analytics/').status_code, [302, 403])
+        response = self.client.post('/login/', {'username': 'unassigned', 'password': 'Initial!TestPassword72'})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_first_login_requires_password_change_and_api_key_is_independent(self):
+        from .models import DashboardAccount
+        account = DashboardAccount.objects.get(user=self.student)
+        account.must_change_password = True
+        account.save()
+        response = self.client.post('/login/', {'username':'team01','password':'Initial!TestPassword72'})
+        self.assertEqual(response.url, '/password/change/')
+        self.assertEqual(self.client.get('/analytics/').url, '/password/change/')
+        self.assertEqual(self.client.get('/api/v3/testing').status_code, 403)
+        response = self.client.post('/password/change/', {'old_password':'Initial!TestPassword72',
+            'new_password1':'Changed!UniquePassword983','new_password2':'Changed!UniquePassword983'})
+        self.assertEqual(response.url, '/analytics/')
+        account.refresh_from_db()
+        self.assertFalse(account.must_change_password)
+        self.team1.refresh_from_db()
+        self.assertEqual(self.team1.token, 'device-token-one')
+        self.assertEqual(self.client.get('/analytics/').status_code, 200)
+        # A device is not tied to dashboard password/session state.
+        self.assertEqual(Client().get('/api/v3/auth/verify', HTTP_AUTHORIZATION='Bearer '+self.team1.token).status_code, 200)
+
+    def test_organizer_can_create_team_and_jury_accounts(self):
+        from .models import DashboardAccount
+        self.client.force_login(self.staff)
+        team = Team.objects.create(team_name='Team-03', token='untouched-token')
+        payload = {'username':'team03','role':'team','team':team.pk,
+                   'password1':'Temporary!UniquePassword837','password2':'Temporary!UniquePassword837'}
+        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
+        user = get_user_model().objects.get(username='team03')
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertTrue(user.check_password(payload['password1']))
+        account = DashboardAccount.objects.get(user=user)
+        self.assertEqual(account.team, team)
+        self.assertTrue(account.must_change_password)
+        payload.update(username='jury02', role='jury', team='')
+        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
+        self.assertFalse(get_user_model().objects.get(username='jury02').is_staff)
+        team.refresh_from_db()
+        self.assertEqual(team.token, 'untouched-token')
+
+    def test_account_validation_duplicate_team_and_token_password(self):
+        from .forms import DashboardAccountForm
+        self.assertEqual(DashboardAccountForm().fields['role'].initial, 'team')
+        self.assertNotIn(self.team1, DashboardAccountForm().fields['team'].queryset)
+        self.client.force_login(self.staff)
+        payload = {'username':'duplicate','role':'team','team':self.team1.pk,
+                   'password1':'Temporary!UniquePassword837','password2':'Temporary!UniquePassword837'}
+        self.assertEqual(self.client.post('/accounts/', payload).status_code, 200)
+        self.assertFalse(get_user_model().objects.filter(username='duplicate').exists())
+        payload.update(username='invalidjury', role='jury')
+        self.client.post('/accounts/', payload)
+        self.assertFalse(get_user_model().objects.filter(username='invalidjury').exists())
+        team = Team.objects.create(team_name='Team-03', token='Separate!StrongDeviceToken8827')
+        payload.update(username='samekey', role='team', team=team.pk, password1=team.token, password2=team.token)
+        self.client.post('/accounts/', payload)
+        self.assertFalse(get_user_model().objects.filter(username='samekey').exists())
+
+    def test_reset_revokes_sessions_and_disable_does_not_revoke_api(self):
+        from .models import DashboardAccount
+        student_client = Client()
+        student_client.force_login(self.student)
+        self.client.force_login(self.staff)
+        account = DashboardAccount.objects.get(user=self.student)
+        self.client.post('/accounts/', {'action':'reset', 'account_id':account.pk, 'temporary_password':'Reset!StrongPassword8273'})
+        self.assertEqual(student_client.get('/analytics/').status_code, 302)
+        self.student.refresh_from_db()
+        self.assertTrue(self.student.check_password('Reset!StrongPassword8273'))
+        self.client.post('/accounts/', {'action':'toggle', 'account_id':account.pk})
+        self.student.refresh_from_db()
+        self.assertFalse(self.student.is_active)
+        self.assertEqual(Client().get('/api/v3/auth/verify', HTTP_AUTHORIZATION='Bearer '+self.team1.token).status_code, 200)
+
+    def test_csrf_required_for_login_and_account_management(self):
+        client = Client(enforce_csrf_checks=True)
+        self.assertEqual(client.post('/login/', {'username':'team01','password':'Initial!TestPassword72'}).status_code, 403)
+        client.force_login(self.staff)
+        self.assertEqual(client.post('/accounts/', {'action':'create'}).status_code, 403)
+        self.assertEqual(client.post('/logout/').status_code, 403)
+
+    def test_model_rejects_staff_team_and_missing_team_roles(self):
+        from .models import DashboardAccount
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):
+            DashboardAccount(user=self.staff, role='team', team=self.team2).full_clean()
+        with self.assertRaises(ValidationError):
+            DashboardAccount(user=self.unassigned, role='team').full_clean()
+
+
+@override_settings(ALLOWED_HOSTS=['testserver'], SECURE_SSL_REDIRECT=False,
+                   PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'],
+                   CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+class NewOrganizerTests(TestCase):
+    def test_created_organizer_gets_management_access_after_password_change(self):
+        cache.clear()
+        original = get_user_model().objects.create_user('original', password='Initial!Password923', is_staff=True)
+        self.client.force_login(original)
+        self.client.post('/accounts/', {'username':'neworganizer', 'role':'organizer', 'team':'',
+                                       'password1':'Temporary!ManagerPassword923','password2':'Temporary!ManagerPassword923'})
+        user = get_user_model().objects.get(username='neworganizer')
+        self.assertTrue(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertTrue(user.has_perm('vtn_hub.change_team'))
+        client = Client()
+        response = client.post('/login/', {'username':user.username, 'password':'Temporary!ManagerPassword923'})
+        self.assertEqual(response.url, '/password/change/')
+        self.assertEqual(client.get('/admin/').url, '/password/change/')
+        response = client.post('/password/change/', {'old_password':'Temporary!ManagerPassword923',
+                              'new_password1':'Changed!ManagerPassword782','new_password2':'Changed!ManagerPassword782'})
+        self.assertEqual(response.url, '/')
+        self.assertEqual(client.get('/accounts/').status_code, 200)
+        self.assertEqual(client.get('/admin/vtn_hub/team/').status_code, 200)

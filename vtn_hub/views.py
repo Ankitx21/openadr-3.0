@@ -11,7 +11,13 @@ from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.http import JsonResponse, HttpResponse, StreamingHttpResponse
-from django.shortcuts import render
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import login, logout, update_session_auth_hash, get_user_model
+from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
@@ -19,6 +25,9 @@ from django.views.decorators.http import require_GET, require_POST
 from .models import Team, TelemetryRecord, snap_to_15min_interval
 from .tariffs import IST, get_or_create_published_tariffs, generate_dynamic_tariffs, save_published_tariffs
 from .security import error, throttle
+from .access import request_access, access_for, save_dashboard_account
+from .forms import DashboardAccountForm
+from .models import DashboardAccount
 
 PHASES = ('testing', 'baseline', 'prototype')
 MAX_APPLIANCES = 12
@@ -40,47 +49,165 @@ def authenticate_team(request):
 
 
 def organizer(user):
-    return user.is_authenticated and user.is_staff and user.is_active
+    return access_for(user)[0] == 'organizer'
 
 
-def api_access(organizer_only=False, public_read=False):
+def api_access(organizer_only=False):
     def decorator(view):
         @wraps(view)
         def wrapped(request, *args, **kwargs):
             request.team = None
-            try:
-                if organizer(request.user) and (organizer_only or not extract_token(request)):
-                    identity = f'user:{request.user.pk}'
-                elif public_read and request.method == 'GET' and not extract_token(request):
-                    identity = 'public:' + request.META.get('REMOTE_ADDR', 'unknown')
-                elif organizer_only:
+            role, linked_team, account = request_access(request)
+            if account and account.must_change_password:
+                return error('Change your temporary dashboard password before continuing.', 403)
+            if role in ('team', 'jury') and request.method not in ('GET', 'HEAD'):
+                return error('Dashboard accounts have read-only API access. Devices must use a team API token without a dashboard session.', 403)
+            if organizer_only:
+                if role != 'organizer' and not (role == 'jury' and request.method == 'GET'):
                     return error('Organizer access required.', 403)
-                else:
-                    # A cache throttle for invalid credentials happens before any database query.
-                    request.team = authenticate_team(request)
-                    if not request.team:
-                        return error('Invalid or missing team token.', 401)
-                    identity = f'team:{request.team.pk}'
-                blocked = throttle(identity, 'api', [(120, 60), (2000, 3600)])
-                if blocked is not None:
-                    return blocked
-            except Exception:
-                return error('Service temporarily unavailable. Try again shortly.', 503, 30)
+            token = extract_token(request)
+            if token and not organizer_only:
+                request.team = authenticate_team(request)
+                if not request.team:
+                    return error('Invalid or missing team token.', 401)
+                if linked_team and request.team.pk != linked_team.pk:
+                    return error('You can only access your own team.', 403)
+                identity = f'team:{request.team.pk}'
+            elif role in ('organizer', 'jury', 'team'):
+                request.team = linked_team
+                identity = f'user:{request.user.pk}'
+            else:
+                return error('Sign in or provide a valid team token.', 401)
+            if request.team and request.GET.get('team') not in (None, '', request.team.team_name):
+                return error('You can only access your own team.', 403)
+            blocked = throttle(identity, 'api', [(120, 60), (2000, 3600)])
+            if blocked is not None:
+                return blocked
             return view(request, *args, **kwargs)
         return wrapped
     return decorator
 
 
 def portal(view):
-    @require_GET
     @wraps(view)
     def wrapped(request, *args, **kwargs):
-        identity = request.META.get('REMOTE_ADDR', 'unknown')
-        blocked = throttle(identity, 'portal', [(30, 60)])
+        if not request.user.is_authenticated:
+            return redirect('/login/?next=' + request.path)
+        role, team, account = request_access(request)
+        if not role:
+            return HttpResponse('No dashboard role assigned. Contact the organizer.', status=403)
+        if account and account.must_change_password:
+            return redirect('password_change')
+        blocked = throttle(request.user.pk, 'portal', [(30, 60)])
         if blocked is not None:
             return blocked
         return view(request, *args, **kwargs)
     return wrapped
+
+
+def login_view(request):
+    role, team, account = request_access(request)
+    if role:
+        return redirect('password_change' if account and account.must_change_password else ('analytics' if role == 'team' else 'dashboard'))
+    form = AuthenticationForm(request, data=request.POST if request.method == 'POST' else None)
+    if request.method == 'POST' and form.is_valid():
+        user = form.get_user()
+        role, team, account = access_for(user)
+        if role:
+            login(request, user)
+            if account and account.must_change_password:
+                return redirect('password_change')
+            next_url = request.POST.get('next') or '/'
+            if role == 'team':
+                next_url = '/analytics/'
+            if not url_has_allowed_host_and_scheme(next_url, {request.get_host()}, require_https=request.is_secure()):
+                next_url = '/'
+            return redirect(next_url)
+        form.add_error(None, 'This account has no dashboard access. Contact the organizer.')
+    return render(request, 'vtn_app/login.html', {'form': form, 'next': request.GET.get('next', '/')})
+
+
+@require_POST
+def logout_view(request):
+    logout(request)
+    return redirect('login')
+
+
+def password_change_view(request):
+    if not request.user.is_authenticated:
+        return redirect('login')
+    role, team, account = request_access(request)
+    if not role:
+        return HttpResponse('No dashboard role assigned.', status=403)
+    if request.method == 'POST':
+        blocked = throttle(request.user.pk, 'password-change', [(10, 300)])
+        if blocked is not None:
+            return blocked
+    form = PasswordChangeForm(request.user, request.POST if request.method == 'POST' else None)
+    if request.method == 'POST' and form.is_valid():
+        if team and form.cleaned_data['new_password1'] == team.token:
+            form.add_error('new_password1', 'Use a password different from your API token.')
+        else:
+            user = form.save()
+            if account:
+                account.must_change_password = False
+                account.save(update_fields=['must_change_password'])
+            update_session_auth_hash(request, user)
+            return redirect('analytics' if role == 'team' else 'dashboard')
+    return render(request, 'vtn_app/password_change.html', {'form': form, 'required_change': bool(account and account.must_change_password)})
+
+
+@portal
+def accounts_view(request):
+    if request_access(request)[0] != 'organizer':
+        return HttpResponse('Organizer access required.', status=403)
+    form = DashboardAccountForm()
+    problem = None
+    notice = None
+    if request.method == 'POST':
+        action = request.POST.get('action', 'create')
+        if action == 'create':
+            form = DashboardAccountForm(request.POST)
+            if form.is_valid():
+                try:
+                    with transaction.atomic():
+                        user = form.save(commit=False)
+                        save_dashboard_account(user, form.cleaned_data['role'], form.cleaned_data.get('team'))
+                    notice = 'Account created. Share its temporary password privately; a password change is required at first sign-in.'
+                    form = DashboardAccountForm()
+                except (ValidationError, IntegrityError, ValueError):
+                    form.add_error(None, 'Could not create account. Check that the username and team are not already assigned.')
+        elif action in ('reset', 'toggle'):
+            try:
+                account_id = int(request.POST.get('account_id', ''))
+            except (ValueError, TypeError):
+                return HttpResponse('Invalid account.', status=400)
+            account = get_object_or_404(DashboardAccount.objects.select_related('user', 'team'), pk=account_id)
+            user = account.user
+            if user.pk == request.user.pk or user.is_superuser:
+                problem = 'Use Change password for your own account. Superuser access cannot be changed here.'
+            elif action == 'toggle':
+                user.is_active = not user.is_active
+                user.save(update_fields=['is_active'])
+                notice = 'Account access updated. Team API credentials are unchanged.'
+            else:
+                password = request.POST.get('temporary_password', '')
+                try:
+                    validate_password(password, user)
+                    if account.team and password == account.team.token:
+                        raise ValidationError('Use a password different from the API token.')
+                    with transaction.atomic():
+                        user.set_password(password)
+                        user.save(update_fields=['password'])
+                        account.must_change_password = True
+                        account.save(update_fields=['must_change_password'])
+                    notice = 'Temporary password updated. Existing sessions are invalidated.'
+                except ValidationError as exc:
+                    problem = ' '.join(exc.messages)
+        else:
+            return HttpResponse('Invalid action.', status=400)
+    accounts = DashboardAccount.objects.select_related('user', 'team').order_by('user__username')
+    return render(request, 'vtn_app/accounts.html', {'form': form, 'accounts': accounts, 'problem': problem, 'notice': notice})
 
 
 def touch_team(team, tariff=False):
@@ -95,8 +222,11 @@ def touch_team(team, tariff=False):
         pass  # Receipt tracking must not turn an already committed report into a failure.
 
 
+@require_GET
 @portal
 def dashboard_view(request):
+    if request_access(request)[0] == 'team':
+        return redirect('analytics')
     teams = cache.get('dashboard-team-summary')
     if teams is None:
         teams = list(Team.objects.annotate(
@@ -122,9 +252,15 @@ def dashboard_view(request):
     })
 
 
+@require_GET
 @portal
 def analytics_view(request):
-    return render(request, 'vtn_app/analytics.html', {'teams': Team.objects.all(), 'selected_team_name': request.GET.get('team', '')})
+    role, team, _ = request_access(request)
+    if team and request.GET.get('team') not in (None, '', team.team_name):
+        return HttpResponse('You can only access your own team.', status=403)
+    teams = Team.objects.all() if role in ('organizer', 'jury') else Team.objects.filter(pk=team.pk)
+    tariffs, _ = get_or_create_published_tariffs() if team else ([], None)
+    return render(request, 'vtn_app/analytics.html', {'teams': teams, 'tariffs': tariffs, 'selected_team_name': team.team_name if team else request.GET.get('team', '')})
 
 
 @require_GET
@@ -132,7 +268,7 @@ def analytics_view(request):
 def api_verify_token(request):
     if request.team:
         touch_team(request.team)
-    return JsonResponse({'status': 'success', 'authenticated': True, 'team_name': request.team.team_name if request.team else 'Organizer'})
+    return JsonResponse({'status': 'success', 'authenticated': True, 'team_name': request.team.team_name if request.team else (request_access(request)[0] or 'organizer').title()})
 
 
 @require_GET
@@ -272,8 +408,8 @@ def handle_submission(request, phase):
         return JsonResponse({'status': 'success', 'phase': phase, 'count': len(records), 'data': records})
     if request.method != 'POST':
         return error('Method not allowed.', 405)
-    if not request.team:
-        return error('Use a team token to submit telemetry.', 403)
+    if not request.team or not extract_token(request):
+        return error('Use a team API token to submit telemetry.', 403)
     try:
         body = parse_body(request)
         ts, notes, items = validate_submission(body)
@@ -362,7 +498,7 @@ def api_leaderboard(request):
 
 
 @require_GET
-@api_access(public_read=True)
+@api_access()
 def api_telemetry_intervals(request):
     phase = request.GET.get('phase', 'baseline')
     period = request.GET.get('range', '24h')
@@ -412,7 +548,7 @@ def api_telemetry_intervals(request):
 
 
 @require_GET
-@api_access(public_read=True)
+@api_access()
 def download_tariffs_csv(request):
     tariffs, _ = get_or_create_published_tariffs()
     out = StringIO()
@@ -426,7 +562,7 @@ def download_tariffs_csv(request):
 
 
 @require_GET
-@api_access(organizer_only=True)
+@api_access()
 def download_telemetry_csv(request):
     identity = 'team:' + str(request.team.pk) if request.team else request.META.get('REMOTE_ADDR', 'unknown')
     blocked = throttle(identity, 'export', [(2, 60)])
@@ -454,7 +590,7 @@ def download_telemetry_csv(request):
         for r in qs.iterator(chunk_size=500):
             yield writer.writerow([safe(v) for v in [r.pk, r.phase, r.timestamp.astimezone(IST).isoformat(),
                 r.interval_timestamp.astimezone(IST).isoformat() if r.interval_timestamp else '', r.team.team_name,
-                r.appliance, r.outdoor_temperature, r.energy, r.notes if organizer(request.user) else '']])
+                r.appliance, r.outdoor_temperature, r.energy, r.notes]])
     response = StreamingHttpResponse(rows(), content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="competition_telemetry.csv"'
     return response

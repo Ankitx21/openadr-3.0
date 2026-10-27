@@ -8,3 +8,5 @@
 @media(max-width:400px){.topbar .timezone{display:none}.metric>strong{font-size:23px}.page-heading p{font-size:11px}}
 
 .brand{font-size:23px;letter-spacing:-0.6px}.topbar-right{display:flex;align-items:center;gap:14px}.topbar-signout{border:0;background:none;color:#6b846f;font-size:11px;padding:7px 0}
+
+.account-form-panel{max-width:700px}.account-form{padding-top:20px}.account-form label,.login-card form label{margin-top:18px;margin-bottom:6px}.account-form input,.account-form select{margin-bottom:7px}.errorlist{color:#a14637;padding-left:18px;font-size:12px}.reset-form{display:flex;gap:8px;align-items:center}.reset-form input[type=password]{width:170px;margin:0}.fixed-team{display:block;padding:10px 0;color:var(--ink);font-size:14px}.account-form .help ul{padding-left:18px}.feedback{margin-bottom:16px}

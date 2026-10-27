@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import secrets
 from django.db import models
+from django.conf import settings
+from django.core.exceptions import ValidationError
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
@@ -41,6 +43,28 @@ class Team(models.Model):
                     "phase": r.phase,
                 }
         return app_dict
+
+
+class DashboardAccount(models.Model):
+    ROLE_CHOICES = [('organizer', 'Organizer'), ('jury', 'Jury'), ('team', 'Team')]
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='dashboard_account')
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    team = models.OneToOneField(Team, null=True, blank=True, on_delete=models.CASCADE, related_name='dashboard_account')
+    must_change_password = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=(
+            models.Q(role='team', team__isnull=False) |
+            models.Q(role__in=['organizer', 'jury'], team__isnull=True)), name='valid_dashboard_role_team')]
+
+    def clean(self):
+        if (self.role == 'team') != bool(self.team_id):
+            raise ValidationError('Team accounts require exactly one team; other roles cannot have a team.')
+        if self.role != 'organizer' and self.user_id and (self.user.is_staff or self.user.is_superuser):
+            raise ValidationError('Team and jury users must not have staff or superuser privileges.')
+
+    def __str__(self):
+        return f'{self.user.username} ({self.get_role_display()})'
 
 
 def snap_to_15min_interval(dt: datetime) -> datetime:

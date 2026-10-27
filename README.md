@@ -1,6 +1,30 @@
 # OpenADR 3.0
 
-Public organizer and jury dashboard for verifying team progress. The homepage and analytics open without a password; anyone with the URL can view the dashboard and charts. Telemetry CSV exports remain restricted to organizer staff. Django admin and all API write operations remain protected. Routes: `/` for the overview, `/analytics/` for team telemetry, and `/admin/` for team management. Teams submit data using their assigned API tokens and the Python/device clients. There is no student web workspace or dashboard tariff publishing control.
+Authenticated dashboard for organizers, juries, and teams. Device API tokens stay independent from dashboard passwords. The previously public homepage and chart/download endpoints now require a dashboard login or an appropriate team API token.
+
+## Account roles and testing on Render
+
+| Role | Dashboard access | Data access | Management |
+| --- | --- | --- | --- |
+| Organizer | Competition overview and all analytics | All teams; all phases; all CSV exports | Create/reset/disable dashboard accounts; manage teams; organizer actions |
+| Jury | Competition overview and all analytics | Read-only across teams and phases; CSV exports | Own password only |
+| Team | Directly to its own analytics; no team dropdown | Only its assigned team, across testing/baseline/prototype; own exports and tariff graph/download | Own password only; no dashboard telemetry mutations |
+
+Open `/login/` after Render deploys this commit. **Existing organizer staff/superuser usernames and passwords continue to work.** Existing API tokens and telemetry are preserved by the migration. If you need a new organizer account, set DJANGO_SUPERUSER_USERNAME to a new username, DJANGO_SUPERUSER_PASSWORD to a strong password, and optional DJANGO_SUPERUSER_EMAIL in Render Environment, then choose Save, rebuild, and deploy. Seeding only creates missing users; it never resets an existing password.
+
+To test Team-01:
+
+1. Sign in as an organizer and open **Dashboard accounts** in the sidebar (`/accounts/`).
+2. Create username `team01`, role **Team**, team **Team-01**, and a strong temporary password. Do not use the API token as the password.
+3. Open a private/incognito window, sign in with `team01` and that temporary password, then complete the required password change.
+4. You land on Team-01 analytics with only its name and data. Phase, appliance, and time filters remain available. The overview redirects to your analytics; another team's URL or request parameter returns 403.
+5. Create a **Jury** account the same way, leaving Team blank. Its dashboard shows every team but offers no account/team administration or API write access.
+
+No role selector is required on the login page. Role and team identity come from server-side account records, not client input. Each team has at most one dashboard account. Passwords use Django password hashing/validation. New dashboard accounts require a password change on first sign-in; organizers can issue a new temporary password or disable an account through Dashboard accounts. Resets invalidate previous dashboard sessions. Disabling a dashboard account does not disable its independent device token. Use token rotation separately when revoking devices.
+
+Django admin stays organizer-only. Passwords and API tokens are never included in team page responses or exports. Team and jury dashboard sessions have read-only data API access, even if they attach a token to a POST. Device clients should use bearer tokens without a dashboard-session cookie; they retain the existing testing/baseline/prototype submission APIs. Session/account mutations require CSRF protection and logout uses POST. First-login password enforcement also applies to the chart API, exports, and Django admin.
+
+The current free Render SQLite setup is for testing: dashboard accounts created at runtime, including their changed passwords, can be lost on a redeploy/restart just like telemetry. No local database or test credentials are uploaded by this commit. For durable accounts and data, plan persistent storage separately.
 
 ## Existing Render test deployment
 
@@ -39,11 +63,11 @@ python manage.py seed_teams
 python manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/ directly; no dashboard account is required. Use `python manage.py createsuperuser` only if you need protected Django admin access. If using the shared workspace virtual environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`. Set SQLITE_PATH only if you want to use a different SQLite file.
+Run `python manage.py createsuperuser` if you do not already have an organizer account, then open http://127.0.0.1:8000/login/. If using the shared workspace virtual environment, replace `python` with `D:\openADR\.venv\Scripts\python.exe`. Set SQLITE_PATH only if you want to use a different SQLite file.
 
 ## Request protection
 
-Dashboard chart data and tariff CSV downloads are public and rate limited. Telemetry CSV exports require organizer staff access. Free-text telemetry notes are included only in staff exports. Team-authenticated requests remain scoped to their own telemetry. Team submissions require a team token, and tariff publishing and Django administration require organizer staff access; session mutations require CSRF. Login attempts, API traffic, tariff downloads, telemetry, and exports have separate limits and return Retry-After on HTTP 429. JSON bodies are capped at 64 KB; teams can submit at most 12 appliances per phase. Telemetry replaces an existing 15-minute appliance slot instead of accumulating duplicates. Testing retains at most 20 records per team.
+Dashboard pages require an assigned authenticated role. All data APIs require a valid team token or dashboard session. Team-authenticated requests, including CSV exports and free-text notes, remain scoped to their own telemetry. Jury sessions can read all teams, while organizer sessions can additionally manage accounts and perform administrative actions. Team submissions require a team token, and tariff publishing and Django administration require organizer staff access; session mutations require CSRF. Login attempts, API traffic, tariff downloads, telemetry, and exports have separate limits and return Retry-After on HTTP 429. JSON bodies are capped at 64 KB; teams can submit at most 12 appliances per phase. Telemetry replaces an existing 15-minute appliance slot instead of accumulating duplicates. Testing retains at most 20 records per team.
 
 The single-worker test configuration shares limits across threads, but does not provide distributed or restart-persistent throttling. Analytics cover at most 31 days and exports stream in chunks. Invalid, nonfinite, negative, or incorrectly timestamped readings are rejected. Production-mode HTTPS, secure cookies, host checks, and CSRF remain enabled. This competition API uses OpenADR terminology; it does not implement the complete OpenADR 3 certification specification.
 

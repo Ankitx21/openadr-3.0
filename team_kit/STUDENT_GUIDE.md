@@ -1,6 +1,6 @@
 # Student connection guide
 
-Use the Python client or HTTP API with the token assigned privately by your organizer. The web dashboard is reserved for organizers and jury members. You do not need organizer credentials to use the team APIs.
+Use the Python client or HTTP API with the token assigned privately by your organizer. For browser access, ask the organizer for your team dashboard username and temporary password. You will set a separate dashboard password at first login and can then view only your own team analytics and exports. You do not need dashboard or organizer credentials for device API calls; use the existing API token without a dashboard-session cookie.
 
 ## Python client
 
@@ -35,7 +35,7 @@ Use `Authorization: Bearer YOUR_ASSIGNED_TOKEN` and `Content-Type: application/j
 | GET `/api/v3/baseline?limit=100` | Recent readings for your team |
 | GET `/api/v3/telemetry/intervals?phase=baseline&range=24h` | Your team's interval chart data |
 
-Do not include another team's name in a request. Organizer publishing, exports, and cross-team standings are restricted.
+Do not include another team's name in a request. Organizer publishing and cross-team standings are restricted. Your authenticated team dashboard can export only your own team data.
 
 Example body:
 

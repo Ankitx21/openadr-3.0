@@ -49,6 +49,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "vtn_hub.access.dashboard_context",
             ],
         },
     },
@@ -89,7 +90,7 @@ SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
-LOGIN_URL = "/admin/login/"
+LOGIN_URL = "/login/"
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
