@@ -15,7 +15,7 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
 # 2. Server & Assigned Team Token
 SERVER_URL = "https://your-competition-server.onrender.com"  # or http://192.168.1.100:7860
-TEAM_TOKEN = "KEY-TEAM01-A7F9"
+TEAM_TOKEN = "YOUR_ASSIGNED_TOKEN"
 APPLIANCE_NAME = "Smart_Water_Heater"
 
 
@@ -31,9 +31,9 @@ def connect_wifi():
 
 
 def fetch_tariffs():
-    url = f"{SERVER_URL}/api/v3/tariffs.json?token={TEAM_TOKEN}"
+    url = f"{SERVER_URL}/api/v3/tariffs.json"
     print("[VTN] Fetching 48-Hour Day-Ahead Tariffs...")
-    resp = urequests.get(url)
+    resp = urequests.get(url, headers={"Authorization": "Bearer " + TEAM_TOKEN})
     if resp.status_code == 200:
         data = resp.json()
         tariffs = data.get("tariffs", [])
@@ -49,13 +49,14 @@ def fetch_tariffs():
 
 
 def report_power(power_kw, status="RUNNING"):
-    url = f"{SERVER_URL}/api/v3/reports?token={TEAM_TOKEN}"
+    url = f"{SERVER_URL}/api/v3/baseline"
     payload = {
         "appliance": APPLIANCE_NAME,
-        "power_kw": power_kw,
+        "energy": power_kw * 0.25,  # Example assumes constant average kW over 15 minutes.
+        # Real hardware must integrate measured power over the entire interval.
         "status": status,
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + TEAM_TOKEN}
     print(f"[VTN] Reporting {APPLIANCE_NAME}: {power_kw} kW...")
     resp = urequests.post(url, data=ujson.dumps(payload), headers=headers)
     if resp.status_code in (200, 201):
@@ -72,9 +73,9 @@ def main():
     # Telemetry loop: report power periodically (e.g. every 15 minutes)
     while True:
         measured_kw = 1.85  # Replace with sensor reading (ADC, CT sensor, or smart plug)
-        report_power(measured_kw, status="GRID_OPTIMIZED")
         # Sleep 15 minutes (900s) to respect rate limits and conserve bandwidth
         time.sleep(900)
+        report_power(measured_kw, status="GRID_OPTIMIZED")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,15 @@
 services:
   - type: web
     name: openadr3-django-vtn
-    env: python
+    runtime: python
     region: oregon
     plan: free
     buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate && python manage.py seed_teams
-    startCommand: gunicorn openadr_django.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 8 --timeout 60
+    startCommand: gunicorn openadr_django.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.12
+        value: 3.12.16
       - key: DEBUG
-        value: "False"
+        value: 'False'
       - key: SECRET_KEY
         generateValue: true

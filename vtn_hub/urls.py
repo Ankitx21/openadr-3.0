@@ -5,6 +5,7 @@ urlpatterns = [
     path("", views.dashboard_view, name="dashboard"),
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
+    path("api/v3/team/status", views.api_team_status, name="api_team_status"),
     path("api/v3/auth/verify", views.api_verify_token, name="api_verify_token"),
     # Phase 1: Testing Endpoints (Check connection & data sending)
     path("api/v3/testing", views.api_testing, name="api_testing"),

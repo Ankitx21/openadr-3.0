@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import secrets
 from django.db import models
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
 
+def generate_team_token():
+    return secrets.token_urlsafe(32)
+
+
 class Team(models.Model):
     team_name = models.CharField(max_length=64, unique=True)
-    token = models.CharField(max_length=64, unique=True)
+    token = models.CharField(max_length=64, unique=True, default=generate_team_token)
     first_connected_at = models.DateTimeField(null=True, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
     last_tariff_fetched_at = models.DateTimeField(null=True, blank=True)
@@ -18,7 +23,7 @@ class Team(models.Model):
         ordering = ["team_name"]
 
     def __str__(self) -> str:
-        return f"{self.team_name} ({self.token})"
+        return self.team_name
 
     @property
     def is_connected(self) -> bool:
@@ -42,12 +47,10 @@ def snap_to_15min_interval(dt: datetime) -> datetime:
     """Snaps a timestamp forward to the nearest 15-minute interval end boundary.
     Safely rolls over 60 minutes into the next hour/day via timedelta arithmetic.
     """
-    dt = dt.replace(microsecond=0)
-    seconds_in_current_block = (dt.minute % 15) * 60 + dt.second
-    if seconds_in_current_block == 0:
+    remainder = timedelta(minutes=dt.minute % 15, seconds=dt.second, microseconds=dt.microsecond)
+    if remainder == timedelta(0):
         return dt
-    needed_seconds = (15 * 60) - seconds_in_current_block
-    return dt + timedelta(seconds=needed_seconds)
+    return dt + timedelta(minutes=15) - remainder
 
 
 class TelemetryRecord(models.Model):
@@ -63,6 +66,7 @@ class TelemetryRecord(models.Model):
 
     class Meta:
         ordering = ["-id"]
+        constraints = [models.UniqueConstraint(fields=["team", "phase", "appliance", "interval_timestamp"], name="unique_team_phase_appliance_slot")]
         indexes = [
             models.Index(fields=["team", "phase"]),
             models.Index(fields=["team", "appliance"]),

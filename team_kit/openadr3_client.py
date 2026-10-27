@@ -15,7 +15,10 @@ import csv
 import json
 import os
 import sys
+import time
 import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +42,8 @@ class TeamVen:
         server_url: str = "https://openadr-3-0.onrender.com",
         appliance_type: str = "Generic_Load",
     ):
+        self._tariff_cache = None
+        self._tariff_cached_at = 0
         self.token = token.strip()
         self.server_url = server_url.rstrip("/")
         self.appliance_type = appliance_type
@@ -52,7 +57,7 @@ class TeamVen:
 
     def _http_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """HTTP GET request with token query fallback."""
-        all_params = {"token": self.token}
+        all_params = {}
         if params:
             all_params.update(params)
 
@@ -63,6 +68,14 @@ class TeamVen:
             resp = requests.get(url, headers=self.headers, timeout=15)
             if resp.status_code == 401:
                 raise PermissionError("Authentication failed: Invalid team API token.")
+            if resp.status_code == 429:
+                raise RuntimeError(f"Request limit reached. Wait {resp.headers.get('Retry-After', '60')} seconds before retrying.")
+            if not resp.ok:
+                try:
+                    message = resp.json().get("message", resp.reason)
+                except ValueError:
+                    message = resp.reason
+                raise RuntimeError(f"HTTP {resp.status_code}: {message}")
             resp.raise_for_status()
             return resp.json()
         else:
@@ -73,17 +86,27 @@ class TeamVen:
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     raise PermissionError("Authentication failed: Invalid team API token.")
-                raise
+                if e.code == 429:
+                    raise RuntimeError(f"Request limit reached. Wait {e.headers.get('Retry-After', '60')} seconds before retrying.") from e
+                raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')}") from e
 
     def _http_post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """HTTP POST request with token."""
-        url = f"{self.server_url}{path}?token={urllib.parse.quote(self.token)}"
+        url = f"{self.server_url}{path}"
         data_bytes = json.dumps(payload).encode("utf-8")
 
         if HAS_REQUESTS:
             resp = requests.post(url, json=payload, headers=self.headers, timeout=15)
             if resp.status_code == 401:
                 raise PermissionError("Authentication failed: Invalid team API token.")
+            if resp.status_code == 429:
+                raise RuntimeError(f"Request limit reached. Wait {resp.headers.get('Retry-After', '60')} seconds before retrying.")
+            if not resp.ok:
+                try:
+                    message = resp.json().get("message", resp.reason)
+                except ValueError:
+                    message = resp.reason
+                raise RuntimeError(f"HTTP {resp.status_code}: {message}")
             resp.raise_for_status()
             return resp.json()
         else:
@@ -94,12 +117,29 @@ class TeamVen:
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     raise PermissionError("Authentication failed: Invalid team API token.")
-                raise
+                if e.code == 429:
+                    raise RuntimeError(f"Request limit reached. Wait {e.headers.get('Retry-After', '60')} seconds before retrying.") from e
+                raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')}") from e
 
-    def get_tariffs(self, save_local: bool = True) -> List[Dict[str, Any]]:
+    def verify_token(self):
+        return self._http_get('/api/v3/auth/verify')
+
+    def get_registered_appliances(self):
+        return self._http_get('/api/v3/appliances').get('appliances', [])
+
+    def get_team_status(self):
+        return self._http_get('/api/v3/team/status')
+
+    def get_tariffs(self, save_local: bool = True, force: bool = False) -> List[Dict[str, Any]]:
         """Fetch direct JSON 48-hour Day-Ahead electricity tariffs from VTN."""
+        if not force and self._tariff_cache is not None and time.monotonic() - self._tariff_cached_at < 3600:
+            if save_local:
+                self._save_tariffs(self._tariff_cache)
+            return self._tariff_cache
         res = self._http_get("/api/v3/tariffs.json")
         tariffs = res.get("tariffs", [])
+        self._tariff_cache = tariffs
+        self._tariff_cached_at = time.monotonic()
 
         if save_local and tariffs:
             self._save_tariffs(tariffs)
@@ -141,6 +181,7 @@ class TeamVen:
         outdoor_temperature: Optional[float] = 30.0,
         appliance: Optional[str] = None,
         notes: str = "Phase 1 Testing Data",
+        timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Phase 1 Testing: Submit verification data to /api/v3/testing."""
         app_name = appliance or self.appliance_type
@@ -149,6 +190,8 @@ class TeamVen:
             "energy": float(energy),
             "notes": notes,
         }
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
         if outdoor_temperature is not None:
             payload["outdoor_temperature"] = float(outdoor_temperature)
         res = self._http_post("/api/v3/testing", payload)
@@ -162,6 +205,7 @@ class TeamVen:
         outdoor_temperature: Optional[float] = None,
         appliance: Optional[str] = None,
         notes: str = "",
+        timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Phase 2 Baseline: Submit 15-minute interval competition telemetry to /api/v3/baseline."""
         app_name = appliance or self.appliance_type
@@ -170,6 +214,8 @@ class TeamVen:
             "energy": float(energy),
             "notes": notes,
         }
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
         if outdoor_temperature is not None:
             payload["outdoor_temperature"] = float(outdoor_temperature)
         res = self._http_post("/api/v3/baseline", payload)
@@ -184,6 +230,7 @@ class TeamVen:
         outdoor_temperature: Optional[float] = None,
         appliance: Optional[str] = None,
         notes: str = "Phase 3 Smart Tariff Optimization",
+        timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Phase 3 Prototype: Submit smart tariff-optimized load data to /api/v3/prototype."""
         app_name = appliance or self.appliance_type
@@ -192,6 +239,8 @@ class TeamVen:
             "energy": float(energy),
             "notes": notes,
         }
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
         if outdoor_temperature is not None:
             payload["outdoor_temperature"] = float(outdoor_temperature)
         res = self._http_post("/api/v3/prototype", payload)
@@ -236,6 +285,7 @@ class TeamVen:
             outdoor_temperature=outdoor_temperature,
             appliance=appliance,
             notes=notes,
+            timestamp=timestamp,
         )
 
     def test_connection(
@@ -257,7 +307,7 @@ def interactive_menu(server_url: str):
     print(" OPENADR 3.0 PARTICIPANT CLIENT")
     print("=" * 65)
 
-    token = input("Enter your assigned Team API Token (e.g. KEY-TEAM01-A7F9): ").strip()
+    token = input("Enter your assigned Team API Token (provided by your organizer): ").strip()
     if not token:
         print("Invalid token.")
         return
@@ -292,7 +342,7 @@ def interactive_menu(server_url: str):
         print("  3. Phase 2: Send Baseline Data (2-Week Active Period - 15-Min Intervals)")
         print("  4. Phase 3: Post Prototype / Product Data (Optimized Product Load)")
         print("  5. Send Multi-Appliance Baseline Data")
-        print("  6. View Live Standings")
+        print("  6. View My Team Progress")
         print("  7. Exit")
         print("=" * 55)
 
@@ -412,15 +462,10 @@ def interactive_menu(server_url: str):
 
         elif choice == "6":
             try:
-                lb = ven.get_leaderboard()
-                print("\nLIVE COMPETITION STANDINGS:")
-                print(f"{'Rank':<6}{'Team Name':<22}{'Baseline Data':<18}{'Prototype Data':<18}{'Appliances':<12}")
-                print("-" * 76)
-                for idx, t in enumerate(lb.get("leaderboard", []), start=1):
-                    b_cnt = t.get("baseline_count", t.get("reports_count", 0))
-                    p_cnt = t.get("prototype_count", 0)
-                    a_cnt = t.get("active_appliances_count", 0)
-                    print(f"{idx:<6}{t.get('team_name'):<22}{b_cnt:<18}{p_cnt:<18}{a_cnt:<12}")
+                status = ven.get_team_status()
+                print(f"\nProgress for {status['team_name']}:")
+                for phase, count in status['counts'].items():
+                    print(f"  {phase.title()}: {count} stored readings")
             except Exception as ex:
                 print(f"[ERROR] {ex}")
 
@@ -431,7 +476,7 @@ def interactive_menu(server_url: str):
 
 def main():
     parser = argparse.ArgumentParser(description="OpenADR 3.0 VEN Client")
-    parser.add_argument("--token", default="", help="Your assigned team API token (e.g. KEY-TEAM01-A7F9)")
+    parser.add_argument("--token", default="", help="Your assigned team API token (provided by your organizer)")
     parser.add_argument("--server", default="https://openadr-3-0.onrender.com", help="Organizer VTN server URL")
     parser.add_argument("--fetch-tariffs", action="store_true", help="Download 48-Hour Day-Ahead Dynamic Tariffs (JSON & CSV)")
     parser.add_argument("--test", "--test-connection", dest="test_mode", action="store_true", help="Phase 1: Send testing data to /api/v3/testing")
@@ -473,7 +518,7 @@ def main():
 
     if args.test_mode:
         enrg = args.energy if args.energy is not None else 1.5
-        ven.send_testing(energy=enrg, outdoor_temperature=args.outdoor_temp or 30.0, appliance=app_name)
+        ven.send_testing(energy=enrg, outdoor_temperature=args.outdoor_temp if args.outdoor_temp is not None else 30.0, appliance=app_name)
         return
 
     if args.fetch_tariffs:
@@ -498,4 +543,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        raise SystemExit(130)
+    except Exception as exc:
+        print(f"Request failed: {exc}")
+        raise SystemExit(1)

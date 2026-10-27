@@ -1,7 +1,7 @@
 /*
  * OpenADR 3.0 ESP32 Microcontroller Client
  * Grid-Interactive Appliance Optimization Competition
- * 
+ *
  * Target Board: ESP32 Dev Module (Arduino IDE)
  * Libraries needed: WiFi.h, HTTPClient.h, ArduinoJson.h
  */
@@ -16,7 +16,7 @@ const char* password = "YOUR_WIFI_PASSWORD";
 
 // 2. Competition Server & Assigned Team Token
 const char* server_url = "https://your-competition-server.onrender.com"; // or http://192.168.1.100:7860
-const char* team_token = "KEY-TEAM01-A7F9"; // Replace with your team's assigned key
+const char* team_token = "YOUR_ASSIGNED_TOKEN"; // Replace with your team's assigned key
 
 // 3. Hardware Appliance Settings
 const char* appliance_name = "Smart_Water_Heater";
@@ -39,16 +39,16 @@ void setup() {
   fetchDayAheadTariffs();
 
   // Step 2: Send Initial Telemetry
-  reportPowerConsumption(1.85, "INITIAL_DISPATCH");
+  // Wait for a complete measurement interval before reporting.
 }
 
 void loop() {
   // Read physical CT current sensor or power meter here
-  float measured_kw = 1.75; 
+  float measured_kw = 1.75;
 
   // Report power telemetry every 15 minutes (900000 ms)
+  delay(900000);
   reportPowerConsumption(measured_kw, "RUNNING_GRID_INTERACTIVE");
-  delay(900000); 
 }
 
 // Function to download direct JSON tariffs
@@ -56,23 +56,24 @@ void fetchDayAheadTariffs() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  String url = String(server_url) + "/api/v3/tariffs.json?token=" + String(team_token);
-  
+  String url = String(server_url) + "/api/v3/tariffs.json";
+
   Serial.println("\n[HTTP] Fetching Day-Ahead Tariffs from VTN...");
   http.begin(url);
+  http.addHeader("Authorization", String("Bearer ") + team_token);
   int httpCode = http.GET();
 
   if (httpCode == 200) {
     String payload = http.getString();
     Serial.println("[HTTP] Tariffs received successfully!");
-    
+
     // Parse JSON
-    DynamicJsonDocument doc(8192);
+    DynamicJsonDocument doc(24576);
     deserializeJson(doc, payload);
 
     JsonArray tariffs = doc["tariffs"];
     Serial.printf("[VTN] Received %d Hourly Intervals:\n", tariffs.size());
-    
+
     // Check first hour price
     if (tariffs.size() > 0) {
       float first_hour_price = tariffs[0]["price_per_kwh"];
@@ -89,16 +90,19 @@ void reportPowerConsumption(float power_kw, const char* status_note) {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  String url = String(server_url) + "/api/v3/reports?token=" + String(team_token);
+  String url = String(server_url) + "/api/v3/baseline";
 
   Serial.printf("\n[VTN] Reporting %s (%.2f kW)...\n", appliance_name, power_kw);
   http.begin(url);
+  http.addHeader("Authorization", String("Bearer ") + team_token);
   http.addHeader("Content-Type", "application/json");
 
   // Create JSON payload
   StaticJsonDocument<256> doc;
   doc["appliance"] = appliance_name;
-  doc["power_kw"] = power_kw;
+  // Demo assumes constant average power for the full 15 minutes.
+  // Real hardware must integrate sensor power over the interval.
+  doc["energy"] = power_kw * 0.25;
   doc["status"] = status_note;
 
   String requestBody;

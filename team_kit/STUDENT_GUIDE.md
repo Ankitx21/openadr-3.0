@@ -1,127 +1,62 @@
-# Grid-Interactive Competition: Student Participant Guide (OpenADR 3.0)
+# Student connection guide
 
-Welcome to the Grid-Interactive Appliance Optimization Challenge.
+Use the Python client or HTTP API with the token assigned privately by your organizer. The web dashboard is reserved for organizers and jury members. You do not need organizer credentials to use the team APIs.
 
-In this competition, your team acts as a Virtual End Node (VEN) communicating with the organizer Virtual Top Node (VTN) server using the OpenADR 3.0 standard.
+## Python client
 
----
+Install `requests` if available (`python -m pip install -r requirements.txt`). The client also supports Python's built-in HTTP library. Run `python openadr3_client.py --server https://YOUR-SERVER` for the interactive menu, or import it:
 
-## 1. Authentication and Access Control
+```python
+from openadr3_client import TeamVen
 
-To access competition data and submit telemetry, your team must use its assigned unique **API Token** (e.g. `KEY-TEAM01-A7F9`).
-
-If an invalid or missing token is provided, the client outputs:
-```text
-Invalid token.
-```
-and exits.
-
----
-
-## 2. Downloading 2-Day Ahead Tariffs (Direct JSON & CSV)
-
-The server provides a 48-hour Day-Ahead horizon (Today + Tomorrow) in INR/kWh:
-
-### Option A: Using the Python Client
-```bash
-python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --fetch-tariffs
-```
-This saves:
-- `tariffs_received.json`: 48-hour Day-Ahead tariffs in JSON format.
-- `tariffs_received.csv`: Formatted spreadsheet for Excel and Pandas.
-
-### Option B: Interactive Menu Mode
-Run without arguments:
-```bash
-python openadr3_client.py
-```
-Enter your assigned token and select option `1` to download tariffs.
-
-### Option C: Direct HTTP Request (ESP32 / Microcontrollers)
-```bash
-curl -X GET "https://your-server.onrender.com/api/v3/tariffs.json?token=YOUR_ASSIGNED_TOKEN"
+ven = TeamVen(token='YOUR_ASSIGNED_TOKEN', server_url='https://YOUR-SERVER')
+ven.verify_token()
+prices = ven.get_tariffs()  # cached within this client instance for one hour
+ven.send_testing(energy=0.25, appliance='AC', outdoor_temperature=31)
+# After a complete real measurement interval, submit the measured energy:
+# ven.send_baseline(energy=measured_kwh, appliance='AC', outdoor_temperature=31)
+# ven.send_prototype(energy=measured_kwh, appliance='AC', outdoor_temperature=31)
 ```
 
----
+Keep tokens private. The client sends authorization headers, not token query strings. Do not commit tokens or print them into logs. Never put your organizer password into a device.
 
----
+## API contract
 
-## 3. Student Competition Lifecycle (3 Phases)
+Use `Authorization: Bearer YOUR_ASSIGNED_TOKEN` and `Content-Type: application/json`.
 
-The competition is structured into 3 distinct phases, with rolling dynamic tariffs continuously available throughout:
+| Route | Purpose |
+| --- | --- |
+| GET `/api/v3/auth/verify` | Check token and identify your team |
+| GET `/api/v3/team/status` | Your team's saved reading counts |
+| GET `/api/v3/tariffs` | 48 hourly prices, today + tomorrow, INR/kWh |
+| POST `/api/v3/testing` | Connection tests, retained separately from competition data |
+| POST `/api/v3/baseline` | Measured baseline interval energy |
+| POST `/api/v3/prototype` | Measured optimized interval energy |
+| GET `/api/v3/baseline?limit=100` | Recent readings for your team |
+| GET `/api/v3/telemetry/intervals?phase=baseline&range=24h` | Your team's interval chart data |
 
-### Continuous: Fetching Dynamic Tariffs
-Day-Ahead dynamic tariffs (today + tomorrow) are always live and updated continuously on the server:
-```bash
-# Using Python Client
-python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --fetch-tariffs
+Do not include another team's name in a request. Organizer publishing, exports, and cross-team standings are restricted.
 
-# Or direct HTTP GET
-curl -X GET "https://your-server.onrender.com/api/v3/tariffs?token=YOUR_ASSIGNED_TOKEN"
+Example body:
+
+```json
+{
+  "appliances": {
+    "Smart_AC": {"energy": 0.25},
+    "Water_Heater": {"energy": 0.50}
+  },
+  "outdoor_temperature": 31.5
+}
 ```
 
-### Phase 1: Connection & Data Testing
-Students check connectivity and test data transmission with the server. Testing records are stored for reference so organizers can verify your connection:
-```bash
-python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --test --appliance Smart_AC --energy 1.5 --outdoor-temp 30.5
-```
-Direct HTTP POST:
-```bash
-curl -X POST "https://your-server.onrender.com/api/v3/testing?token=YOUR_ASSIGNED_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"appliance": "Smart_AC", "energy": 1.5, "outdoor_temperature": 30.5}'
-```
+Send energy consumed during the interval, in kWh. A constant 1 kW load running for 15 minutes consumes 0.25 kWh. Instantaneous `power_kw` is not interval energy and is rejected unless a valid `energy` or `energy_kwh` is also supplied. For varying power, integrate sensor readings over the interval. Hardware examples use a constant-power assumption only to demonstrate unit conversion.
 
-### Phase 2: Baseline Data (2-Week Active Period)
-During the 2-week active competition period, submit regular baseline energy data. Readings are automatically snapped to 15-minute intervals:
-```bash
-python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --baseline 2.10 --appliance Smart_AC --outdoor-temp 32.0
-```
-Direct HTTP POST:
-```bash
-curl -X POST "https://your-server.onrender.com/api/v3/baseline?token=YOUR_ASSIGNED_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"appliances": {"Smart_AC": 2.10, "EV_Charger": 3.40}, "outdoor_temperature": 32.0}'
-```
+Send one batch every 15 minutes, up to 12 uniquely named appliances per phase. Reusing the same name in the same 15-minute slot updates the previous reading. A successful request returns HTTP 201. The optional timestamp must be ISO 8601 with a timezone (for example `2026-10-26T10:15:00+05:30`), within the past 31 days or at most 5 minutes ahead. Without a timestamp the server uses receipt time. Timestamps round forward to an interval ending boundary; align submissions to interval boundaries and include measurement timestamps where possible. Notes may contain up to 1,000 characters. Testing retains only the latest 20 readings per team.
 
-### Phase 3: Prototype Product Posting (Actual Ready Product)
-When your smart optimization algorithm or hardware is ready, post your tariff-optimized load data:
-```bash
-python openadr3_client.py --token "YOUR_ASSIGNED_TOKEN" --server "https://your-server.onrender.com" --prototype 1.15 --appliance Smart_AC
-```
-Direct HTTP POST:
-```bash
-curl -X POST "https://your-server.onrender.com/api/v3/prototype?token=YOUR_ASSIGNED_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"appliances": {"Smart_AC": 1.15, "EV_Charger": 0.0}, "notes": "Shifted load off evening peak"}'
-```
+## Avoid request loops
 
----
+Fetch tariffs once and cache them; refresh once an hour. Keep at least 2 seconds between telemetry requests, including testing requests. Budgets are shared across all your team's devices and all three phases: 24 appliance readings per minute and 120 per hour. This supports 12 appliances batched every 15 minutes. Tariff budgets are 6 per minute and 30 per hour, with a 5-second spacing limit.
 
-## 4. Rate Limiting Rules
-To maintain server performance and prevent accidental loops from microcontrollers:
-1. **Per-Appliance Cooldown**: Minimum **2 seconds** required between submissions for the same appliance.
-2. **Team Minute Limit**: Maximum **20 submissions per minute** across all microcontrollers for a team.
-3. **Team Hourly Limit**: Maximum **60 submissions per hour** across all microcontrollers for a team.
-4. Exceeding limits returns `HTTP 429 Too Many Requests`.
+On HTTP 429, read `Retry-After`, wait that many seconds, and add a little random delay. Do not retry in a tight loop. On 400 fix the payload; on 401 check your token with the organizer; on 403 check which endpoint you used; on 503 wait before trying again. The Python client surfaces errors and never automatically retries telemetry POSTs.
 
----
-
-## 5. Hardware Implementation (ESP32 / MicroPython)
-
-- **ESP32 (Arduino C++)**: See [`esp32_example.ino`](file:///d:/openADR/openadr_django/team_kit/esp32_example.ino). Includes a 15-minute interval timer loop.
-- **MicroPython (Raspberry Pi Pico W / ESP32)**: See [`micropython_example.py`](file:///d:/openADR/openadr_django/team_kit/micropython_example.py).
-
----
-
-## 6. OpenADR 3.0 API Summary
-
-| Action | Method | Endpoint | Description |
-| :--- | :--- | :--- | :--- |
-| Dynamic Tariffs | GET | `/api/v3/tariffs?token=KEY` | Continuous 48 hourly intervals (Today + Tomorrow) |
-| Phase 1: Testing | POST | `/api/v3/testing?token=KEY` | Verify client-server connection and data sending |
-| Phase 2: Baseline Data | POST | `/api/v3/baseline?token=KEY` | 2-week baseline competition data (15-min intervals) |
-| Phase 3: Prototype Posting | POST | `/api/v3/prototype?token=KEY` | Post smart tariff-optimized device loads |
-| 15-Min Interval Data | GET | `/api/v3/baseline/intervals` | Query interval profiles for charts and analysis |
-| List Registered Appliances | GET | `/api/v3/appliances?token=KEY` | Returns team appliances and latest energy readings |
-| Live Standings | GET | `/api/v3/leaderboard` | View baseline & prototype progress rankings |
+`simulate_appliance.py --token YOUR_ASSIGNED_TOKEN --server https://YOUR-SERVER` compares equal-energy price schedules locally. It never submits forecasts as real baseline/prototype data. Add `--send-test` only to send a clearly marked synthetic connection test.

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.core.cache import cache
 from vtn_hub.tariffs import generate_dynamic_tariffs, save_published_tariffs
 
 
@@ -33,8 +34,16 @@ class Command(BaseCommand):
         min_p = options.get("min_price", 8.0)
         max_p = options.get("max_price", 20.0)
 
-        points, seed_used = generate_dynamic_tariffs(seed=seed, min_price=min_p, max_price=max_p)
-        save_published_tariffs(points, seed=seed_used)
+        try:
+            points, seed_used = generate_dynamic_tariffs(seed=seed, min_price=min_p, max_price=max_p)
+        except ValueError as exc:
+            raise CommandError(str(exc))
+        if not cache.add('tariff-rollover-lock', True, 15):
+            raise CommandError('Another tariff update is in progress. Retry shortly.')
+        try:
+            save_published_tariffs(points, seed=seed_used)
+        finally:
+            cache.delete('tariff-rollover-lock')
 
         prices = [p["price_per_kwh"] for p in points]
         avg_price = sum(prices) / len(prices)

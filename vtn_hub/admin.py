@@ -1,10 +1,19 @@
 from django.contrib import admin
-from .models import Team, TelemetryRecord, TariffInterval
+from .models import Team, TelemetryRecord, TariffInterval, generate_team_token
 
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ("team_name", "token", "is_connected", "last_connected_at", "total_records")
+    list_display = ("team_name", "is_connected", "last_connected_at", "total_records")
+    readonly_fields = ("token", "first_connected_at", "last_connected_at", "last_tariff_fetched_at")
+    actions = ["rotate_tokens"]
+
+    @admin.action(description="Rotate selected team tokens (old tokens stop working)")
+    def rotate_tokens(self, request, queryset):
+        for team in queryset:
+            team.token = generate_team_token()
+            team.save(update_fields=["token"])
+        self.message_user(request, "Tokens rotated. Open each team to retrieve its new token.")
     search_fields = ("team_name", "token")
     list_filter = ("first_connected_at",)
 

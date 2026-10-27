@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import random
+import math
 from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
+from django.core.cache import cache
 from .models import TariffInterval
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
@@ -20,6 +22,8 @@ def generate_dynamic_tariffs(
     Uses random.Random(seed) so generation is completely deterministic if a seed is provided,
     or unpredictable if seed is omitted.
     """
+    if not all(math.isfinite(x) for x in (min_price, max_price)) or not 0 <= min_price <= max_price <= 1000:
+        raise ValueError("Prices must be finite and satisfy 0 <= min <= max <= 1000.")
     if seed is None:
         seed = random.randint(10000, 999999)
 
@@ -105,6 +109,7 @@ def save_published_tariffs(intervals: List[Dict[str, Any]], seed: Optional[int] 
             for item in intervals
         ]
         TariffInterval.objects.bulk_create(records)
+        transaction.on_commit(lambda: cache.delete("published-tariffs"))
 
 
 def get_or_create_published_tariffs(
@@ -112,8 +117,12 @@ def get_or_create_published_tariffs(
     max_price: float = 20.0,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """Retrieve currently published tariffs, or dynamically generate and save if none exist."""
+    today = datetime.now(IST).date()
+    cached = cache.get("published-tariffs")
+    if cached and datetime.fromisoformat(cached[0][0]["start_time"]).astimezone(IST).date() == today:
+        return cached
     existing = list(TariffInterval.objects.all().order_by("hour_index"))
-    if len(existing) == 48:
+    if len(existing) == 48 and existing[0].start_time.astimezone(IST).date() == today:
         seed = existing[0].seed_used
         points = [
             {
@@ -129,12 +138,25 @@ def get_or_create_published_tariffs(
             }
             for r in existing
         ]
+        cache.set("published-tariffs", (points, seed), 60)
         return points, seed
 
     # No tariffs published yet -> generate and publish automatically
-    points, seed = generate_dynamic_tariffs(min_price=min_price, max_price=max_price)
-    save_published_tariffs(points, seed=seed)
-    return points, seed
+    if not cache.add("tariff-rollover-lock", True, 15):
+        from .security import ServiceBusy
+        raise ServiceBusy("Tariffs are being refreshed. Retry shortly.")
+    try:
+        points, seed = generate_dynamic_tariffs(min_price=min_price, max_price=max_price)
+        announced = {r.start_time.astimezone(IST): r for r in existing}
+        for point in points:
+            previous = announced.get(datetime.fromisoformat(point["start_time"]))
+            if previous:
+                point["price_per_kwh"] = previous.price_per_kwh
+        save_published_tariffs(points, seed=seed)
+        cache.set("published-tariffs", (points, seed), 60)
+        return points, seed
+    finally:
+        cache.delete("tariff-rollover-lock")
 
 
 def get_2day_ahead_tariffs() -> List[Dict[str, Any]]:
